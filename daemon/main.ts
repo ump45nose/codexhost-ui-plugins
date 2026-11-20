@@ -8,6 +8,8 @@ import { Channel } from "./channel.ts";
 import { discoveryLoop, findDesktop } from "./desktop.ts";
 import { Injector } from "./injector.ts";
 import { loadRegistry } from "./registry.ts";
+import { startTasks } from "./tasks.ts";
+import { startUpdater } from "./updater.ts";
 
 const log = (...args: unknown[]) => console.log(new Date().toISOString(), ...args);
 const logError = (...args: unknown[]) => console.error(new Date().toISOString(), ...args);
@@ -34,8 +36,8 @@ watchFile(buildIdFile, { interval: 1000 }, () => {
 });
 
 // Local tasks (W1.3) and the updater (W1.4) are wired here:
-// startTasks(registry, channel);
-// startUpdater(repoDir, channel);
+startTasks(registry, channel, log);
+startUpdater(repoDir, channel, { distDir, log });
 
 await discoveryLoop({
   find: () => findDesktop(),

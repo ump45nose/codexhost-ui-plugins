@@ -1,0 +1,19 @@
+{
+  "name": "codexhost-ui-plugins",
+  "private": true,
+  "type": "module",
+  "license": "LGPL-3.0-only",
+  "engines": { "node": ">=22.18" },
+  "scripts": {
+    "daemon": "node daemon/main.ts",
+    "build": "node scripts/build.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.1.1"
+  }
+}

@@ -1,4 +1,4 @@
-// Daemon entry: `node daemon/main.ts`. Set CXP_DIST_DIR to inject from another dist directory.
+// Daemon entry: `node daemon/main.ts`.
 
 import { readFileSync, watchFile } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -15,7 +15,7 @@ const log = (...args: unknown[]) => console.log(new Date().toISOString(), ...arg
 const logError = (...args: unknown[]) => console.error(new Date().toISOString(), ...args);
 
 const repoDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const distDir = resolve(process.env.CXP_DIST_DIR ?? join(repoDir, "dist"));
+const distDir = join(repoDir, "dist");
 
 const registry = await loadRegistry(distDir, join(repoDir, "plugins"));
 const channel = new Channel(registry, log);
@@ -37,16 +37,16 @@ watchFile(buildIdFile, { interval: 1000 }, () => {
 
 // Local tasks (W1.3) and the updater (W1.4) are wired here:
 startTasks(registry, channel, log);
-startUpdater(repoDir, channel, { distDir, log });
+startUpdater(repoDir, channel, { log });
+const injector = new Injector(channel, log);
 
 await discoveryLoop({
   find: () => findDesktop(),
   log,
   session: async (endpoint) => {
     const cdp = await CdpConnection.connect(endpoint.browserUrl);
-    const injector = new Injector(cdp, channel, log);
     try {
-      await injector.start();
+      await injector.start(cdp);
       await cdp.closed;
     } finally {
       injector.dispose();

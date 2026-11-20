@@ -50,19 +50,13 @@ while launchctl print "$domain/$label" >/dev/null 2>&1; do
 done
 
 if [ -n "$picker_dir" ]; then
-  CXP_PICKER_DIR="$picker_dir" "$node" -e '
-    const fs = require("node:fs"), path = require("node:path"), os = require("node:os");
-    const file = path.join(os.homedir(), ".config", "codexhost-ui-plugins", "config.json");
-    let config = {};
-    try { config = JSON.parse(fs.readFileSync(file, "utf8")); }
-    catch (e) { if (e.code !== "ENOENT") { console.error(`install: cannot read ${file}: ${e.message}`); process.exit(1); } }
-    config.plugins ??= {};
+  CXP_PICKER_DIR="$picker_dir" "$node" --input-type=module -e '
+    import { configPath, readConfig, writeConfig } from "./daemon/config.ts";
+    const config = readConfig();
     const entry = (config.plugins["project-picker"] ??= {});
-    (entry.settings ??= {}).defaultDirectory = process.env.CXP_PICKER_DIR;
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(`${file}.tmp`, JSON.stringify(config, null, 2) + "\n");
-    fs.renameSync(`${file}.tmp`, file);
-    console.log(`project-picker defaultDirectory -> ${process.env.CXP_PICKER_DIR} (${file})`);
+    entry.settings = { ...entry.settings, defaultDirectory: process.env.CXP_PICKER_DIR };
+    writeConfig(config);
+    console.log(`project-picker defaultDirectory -> ${process.env.CXP_PICKER_DIR} (${configPath()})`);
   '
 fi
 

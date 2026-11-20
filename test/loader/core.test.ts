@@ -52,19 +52,22 @@ describe("loader isolation (C1.4)", () => {
     expect(page.loader().getState().local["later-fail"]?.status).toBe("failed");
   });
 
-  it("retry runs the lifecycle again", () => {
+  it("retry runs the lifecycle again once the daemon clears the failure", () => {
     const page = setup();
     let broken = true;
     page.register("flaky", () => {
       if (broken) throw new Error("not yet");
     });
     page.push([{ id: "flaky" }]);
+    page.push([{ id: "flaky", status: "failed", source: "main", reason: "not yet" }]); // the daemon echoes the failure
     expect(page.loader().getState().local.flaky?.status).toBe("failed");
     broken = false;
     page.loader().retry("flaky");
+    expect(page.sent.at(-1)).toEqual({ type: "retry", plugin: "flaky" });
+    expect(page.loader().getState().local.flaky?.status).toBe("failed");
+    page.push([{ id: "flaky" }]); // the daemon cleared the page failure
     expect(page.loader().getState().local.flaky?.status).toBe("active");
-    expect(page.sent.some((m) => m.type === "retry" && m.plugin === "flaky")).toBe(true);
-    expect(page.doc.getElementById("cxp-failure-notice")).toBeNull();
+    expect(page.doc.getElementById("cxp-failure-notice")?.textContent ?? "").not.toContain("flaky");
   });
 
   it("does not show the notice in the pet window", () => {
@@ -193,16 +196,12 @@ describe("enable, settings and daemon failures (C1.5b)", () => {
 });
 
 describe("channel and startup", () => {
-  it("queues messages until the daemon binding appears and reports focus", () => {
+  it("says hello and reports focus", () => {
     const page = fakeWindow();
     const listeners: Record<string, () => void> = {};
     page.win.addEventListener = (type: string, fn: () => void) => (listeners[type] = fn);
-    delete page.win.__cxpDaemon;
     startLoader(page.win, "build-1");
     listeners.blur();
-    expect(page.sent).toEqual([]);
-    page.win.__cxpDaemon = (json: string) => page.sent.push(JSON.parse(json));
-    vi.advanceTimersByTime(250);
     expect(page.sent).toEqual([
       { type: "hello", window: "main", buildId: "build-1", focused: true },
       { type: "focus", focused: false },

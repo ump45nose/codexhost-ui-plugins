@@ -9,6 +9,8 @@ export type RequestHandler = (params: unknown) => Promise<unknown>;
 export type PluginChange = "enabled" | "settings" | "retry";
 export type StatusSource = "rewriter" | "task";
 
+export const errorText = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
 export interface UpdateState {
   checkedAt: string | null;
   error?: string;
@@ -126,7 +128,7 @@ export class Channel {
     try {
       this.#handle(sessionId, page, msg);
     } catch (error) {
-      this.#log(`channel: ${msg.type} failed:`, error instanceof Error ? error.message : error);
+      this.#log(`channel: ${msg.type} failed:`, errorText(error));
     }
   }
 
@@ -171,7 +173,6 @@ export class Channel {
     switch (msg.type) {
       case "hello":
         // A hello starts a new document: forget what the previous one reported.
-        page.window = msg.window;
         page.lastSent = null;
         this.#clearPageStatuses(sessionId);
         for (const l of this.#helloListeners) l(sessionId, msg);
@@ -196,14 +197,16 @@ export class Channel {
         this.registry.setSettings(msg.plugin, msg.values ?? {});
         this.#changed(msg.plugin, "settings");
         return;
-      case "retry":
-        // Task failures are cleared here (the task listener restarts the task); rewriter failures
-        // stay until the next Pet load, which the rewriter triggers on "retry". Page-session
-        // failures belong to the loader, which re-runs the plugin itself.
+      case "retry": {
+        // Page-session failures are cleared here, and pages that failed the plugin re-run it once
+        // the pushed aggregate is no longer failed. The task listener restarts a failed task; a
+        // rewriter failure stays until the Pet reload the rewriter starts on "retry".
         if (!this.registry.get(msg.plugin)) return;
-        if (this.statusOf(msg.plugin, "task") === "failed") this.setStatus(msg.plugin, "task", null);
+        const statuses = this.#statuses.get(msg.plugin);
+        for (const [key, s] of statuses ?? []) if (key.startsWith("page:") && s.state === "failed") statuses!.delete(key);
         this.#changed(msg.plugin, "retry");
         return;
+      }
       case "request":
         void this.#serve(page, msg);
         return;
@@ -220,7 +223,7 @@ export class Channel {
       try {
         reply = { type: "response", id: msg.id, result: (await handler(msg.params)) ?? null };
       } catch (error) {
-        reply = { type: "response", id: msg.id, error: error instanceof Error ? error.message : String(error) };
+        reply = { type: "response", id: msg.id, error: errorText(error) };
       }
     }
     await this.#send(page, JSON.stringify(reply));
@@ -263,7 +266,7 @@ export class Channel {
     try {
       await page.evaluate(`window.__cxpReceive?.(${json})`);
     } catch (error) {
-      this.#log("channel: push failed:", error instanceof Error ? error.message : error);
+      this.#log("channel: push failed:", errorText(error));
     }
   }
 }

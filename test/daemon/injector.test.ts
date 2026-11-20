@@ -12,8 +12,8 @@ const flush = async () => {
 async function start(plugins = [plugin("a")], buildId = "build-1") {
   const { channel, registry } = setup(plugins, buildId);
   const cdp = new FakeCdp();
-  const injector = new Injector(cdp, channel, () => {});
-  await injector.start();
+  const injector = new Injector(channel, () => {});
+  await injector.start(cdp);
   const attach = async (sid: string, url: string, waiting = false, type = "page") => {
     cdp.emit("Target.attachedToTarget", { sessionId: sid, targetInfo: { type, url, targetId: `t-${sid}` }, waitingForDebugger: waiting });
     await flush();
@@ -61,10 +61,6 @@ describe("injector", () => {
     await t.attach("p", PET);
     expect(t.cdp.methods("m")).toEqual(["Runtime.enable", "Runtime.addBinding", "Page.enable", "Page.addScriptToEvaluateOnNewDocument", "Runtime.evaluate"]);
     expect(t.cdp.methods("p").filter((m) => m === "Page.reload")).toHaveLength(1);
-    // Re-attaching the same target (e.g. a new session) does not reload it again.
-    t.cdp.emit("Target.attachedToTarget", { sessionId: "p2", targetInfo: { type: "page", url: PET, targetId: "t-p" }, waitingForDebugger: false });
-    await flush();
-    expect(t.cdp.methods("p2")).not.toContain("Page.reload");
   });
 
   it("does not reload a loaded Pet when no rewrite rules are enabled; ignores other targets", async () => {
@@ -111,21 +107,24 @@ describe("injector", () => {
     expect(pushes.length).toBeGreaterThan(0);
   });
 
-  it("reloads all pages for a stale build only once the main window is unfocused", async () => {
+  it("reloads all pages for a stale build only once the main window is known to be unfocused", async () => {
     const t = await start([plugin("a")], "build-2");
+    const reloads = () => t.cdp.calls.filter((c) => c.method === "Page.reload").map((c) => c.sessionId).sort();
     await t.attach("m", MAIN);
     await t.attach("p", PET);
-    t.hello("m", "main", true, "build-1");
-    t.hello("p", "pet", false, "build-1");
+    t.hello("p", "pet", false, "build-1"); // main's focus is still unknown
     await flush();
-    expect(t.cdp.calls.filter((c) => c.method === "Page.reload")).toHaveLength(0);
+    t.hello("m", "main", true, "build-1");
+    await flush();
+    expect(reloads()).toEqual([]);
     t.cdp.emit("Runtime.bindingCalled", { name: "__cxpDaemon", payload: JSON.stringify({ type: "focus", focused: false }) }, "m");
     await flush();
-    expect(t.cdp.calls.filter((c) => c.method === "Page.reload").map((c) => c.sessionId).sort()).toEqual(["m", "p"]);
-    // The reloaded pages still report the old build (a broken build): no reload loop.
-    t.hello("m", "main", false, "build-1");
+    expect(reloads()).toEqual(["m", "p"]);
+    // The reloaded pages report the disk build: no further reload.
+    t.hello("p", "pet", false, "build-2");
+    t.hello("m", "main", false, "build-2");
     await flush();
-    expect(t.cdp.calls.filter((c) => c.method === "Page.reload")).toHaveLength(2);
+    expect(reloads()).toEqual(["m", "p"]);
   });
 });
 

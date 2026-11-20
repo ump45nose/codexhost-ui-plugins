@@ -58,7 +58,7 @@ interface Slot {
   settingsKey?: string;
   /** Bumped on every start/stop so a stale api.fail from an earlier activation is ignored. */
   gen: number;
-  /** Failed in this page (throw or api.fail); cleared by retry, disable, or the daemon clearing it. */
+  /** Failed in this page (throw or api.fail); cleared by disabling, or when the daemon's aggregate stops being failed (retry). */
   failed: boolean;
   fastUntil: number;
   nextGuardCheck: number;
@@ -71,7 +71,6 @@ const READY_POLL_MS = 100;
 const GUARD_FAST_MS = 1_000;
 const GUARD_FAST_WINDOW_MS = 15_000;
 const GUARD_SLOW_MS = 10_000;
-const SEND_RETRY_MS = 250;
 
 export function startLoader(win: LoaderWindow, buildId: string): void {
   // The daemon registers the script for new documents and also evaluates it once on a loaded page.
@@ -84,33 +83,13 @@ export function startLoader(win: LoaderWindow, buildId: string): void {
   const slots = new Map<string, Slot>();
   const listeners = new Set<(state: LoaderState) => void>();
   const pending = new Map<number, { resolve(v: unknown): void; reject(e: Error): void }>();
-  const outbox: string[] = [];
   let daemon: DaemonState | null = null;
   let ready = false;
   let requestSeq = 0;
-  let flushTimer: ReturnType<typeof setTimeout> | undefined;
 
-  // ---- channel ----
+  // ---- channel (the daemon adds the binding before this script runs) ----
   function send(msg: Record<string, unknown>): void {
-    outbox.push(JSON.stringify(msg));
-    flush();
-  }
-  function flush(): void {
-    const bind = win.__cxpDaemon;
-    if (typeof bind !== "function") {
-      flushTimer ??= setTimeout(() => {
-        flushTimer = undefined;
-        flush();
-      }, SEND_RETRY_MS);
-      return;
-    }
-    while (outbox.length) {
-      try {
-        bind(outbox.shift());
-      } catch (error) {
-        console.warn("[cxp] send failed", error);
-      }
-    }
+    win.__cxpDaemon(JSON.stringify(msg));
   }
   function hello(): void {
     send({ type: "hello", window: kind, buildId, focused: doc.hasFocus() });
@@ -149,7 +128,7 @@ export function startLoader(win: LoaderWindow, buildId: string): void {
     const prev = daemon;
     daemon = next;
     for (const slot of slots.values()) {
-      // A retry from another window clears the daemon's failed mark; follow it here too.
+      // A retry (from any window) clears the daemon's failed mark: run the plugin again.
       if (slot.failed && entry(slot.id, prev)?.status === "failed" && entry(slot.id)?.status !== "failed") {
         slot.failed = false;
       }
@@ -278,7 +257,7 @@ export function startLoader(win: LoaderWindow, buildId: string): void {
 
   // ---- public surface ----
   win.__cxpLoaderRegister = (id: string, activate: Activate, meta?: { forkGuards?: string[] }) => {
-    if (slots.has(id) || typeof activate !== "function") return;
+    if (slots.has(id)) return;
     const slot: Slot = {
       id,
       activate,
@@ -315,10 +294,6 @@ export function startLoader(win: LoaderWindow, buildId: string): void {
     },
     retry(id) {
       send({ type: "retry", plugin: id });
-      const slot = slots.get(id);
-      if (!slot) return;
-      slot.failed = false;
-      reconcile(slot);
     },
   };
   win.__cxpLoaderV1 = api;
@@ -342,9 +317,4 @@ export function startLoader(win: LoaderWindow, buildId: string): void {
   waitReady();
 }
 
-function errorText(error: unknown): string {
-  if (error instanceof Error) return error.message || error.name;
-  if (typeof error === "string") return error;
-  if (error && typeof error === "object" && "message" in error) return String(error.message);
-  return JSON.stringify(error) ?? String(error);
-}
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));

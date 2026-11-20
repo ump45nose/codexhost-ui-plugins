@@ -1,11 +1,11 @@
 // Auto-update: every 2 minutes fetch the repo's upstream and, when `main` is checked out, clean and
-// fast-forwardable, merge, `npm ci` if the lockfile changed, build into a temp dir and swap it into
-// dist/. The new dist/build-id makes the daemon exit (main.ts) so launchd starts the new code.
+// fast-forwardable, merge, `npm ci` if the lockfile changed, and run scripts/build.mjs (which swaps
+// in a new dist/ only on success). The new dist/build-id makes the daemon exit (main.ts) so launchd
+// starts the new code.
 // A failed `npm ci` or build resets to the pre-merge commit and is not retried for the same commit.
 
 import { execFile } from "node:child_process";
-import { existsSync, renameSync, rmSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Channel, Log } from "./channel.ts";
 
@@ -13,10 +13,8 @@ const execFileAsync = promisify(execFile);
 
 export interface UpdaterOptions {
   intervalMs?: number; // default 2 minutes
-  distDir?: string; // default <repo>/dist
-  git?: string; // git executable
   npmCi?: string[]; // default ["npm", "ci"]
-  build?: (outDir: string) => string[]; // default: node scripts/build.mjs --out <outDir>
+  build?: string[]; // default: node scripts/build.mjs
   log?: Log;
 }
 
@@ -31,12 +29,11 @@ class Skip extends Error {}
 
 export function startUpdater(repoDir: string, channel: Pick<Channel, "setUpdate">, options: UpdaterOptions = {}): Updater {
   const intervalMs = options.intervalMs ?? 2 * 60_000;
-  const distDir = options.distDir ?? join(repoDir, "dist");
   const npmCi = options.npmCi ?? ["npm", "ci"];
-  const build = options.build ?? ((out: string) => [process.execPath, join(repoDir, "scripts", "build.mjs"), "--out", out]);
+  const build = options.build ?? [process.execPath, join(repoDir, "scripts", "build.mjs")];
   const log = options.log ?? console.log;
   const run = (command: string[]) => exec(command, repoDir);
-  const git = async (...args: string[]) => (await run([options.git ?? "git", ...args])).trim();
+  const git = async (...args: string[]) => (await run(["git", ...args])).trim();
 
   let failed: { commit: string; error: string } | null = null;
   let lastNote: string | null = null;
@@ -75,7 +72,7 @@ export function startUpdater(repoDir: string, channel: Pick<Channel, "setUpdate"
     try {
       if (lockChanged) await run(npmCi);
       stage = "build";
-      await buildAndSwap();
+      await run(build);
     } catch (error) {
       failed = { commit: target, error: `update to ${short(target)} failed (${stage}): ${reasonOf(error)}` };
       log(`updater: ${failed.error}; resetting to ${short(head)}`);
@@ -96,26 +93,6 @@ export function startUpdater(repoDir: string, channel: Pick<Channel, "setUpdate"
     } catch {
       return false;
     }
-  }
-
-  /** Builds into a temp sibling of dist/ and swaps it in; the swap is what changes dist/build-id. */
-  async function buildAndSwap(): Promise<void> {
-    const parent = dirname(distDir);
-    const temp = join(parent, `.dist-update-${process.pid}`);
-    const replaced = join(parent, `.dist-replaced-${process.pid}`);
-    rmSync(temp, { recursive: true, force: true });
-    try {
-      await run(build(temp));
-      if (!existsSync(join(temp, "build-id"))) throw new Error("build produced no build-id");
-    } catch (error) {
-      rmSync(temp, { recursive: true, force: true });
-      throw error;
-    }
-    rmSync(replaced, { recursive: true, force: true });
-    const hadDist = existsSync(distDir);
-    if (hadDist) renameSync(distDir, replaced);
-    renameSync(temp, distDir);
-    if (hadDist) rmSync(replaced, { recursive: true, force: true });
   }
 
   async function tick(): Promise<void> {

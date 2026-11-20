@@ -3,7 +3,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { Log } from "./channel.ts";
+import { errorText, type Log } from "./channel.ts";
 
 export interface Endpoint {
   port: number;
@@ -69,7 +69,7 @@ export async function discoveryLoop(opts: {
     try {
       endpoint = await opts.find();
     } catch (error) {
-      opts.log("desktop: discovery failed:", error instanceof Error ? error.message : error);
+      opts.log("desktop: discovery failed:", errorText(error));
     }
     if (!endpoint) {
       if (!waiting) opts.log("desktop: waiting for Codex Desktop with a debugging port");
@@ -83,7 +83,7 @@ export async function discoveryLoop(opts: {
       await opts.session(endpoint);
       opts.log(`desktop: disconnected from port ${endpoint.port}`);
     } catch (error) {
-      opts.log(`desktop: session on port ${endpoint.port} failed:`, error instanceof Error ? error.message : error);
+      opts.log(`desktop: session on port ${endpoint.port} failed:`, errorText(error));
       await new Promise((resolve) => setTimeout(resolve, interval));
     }
   }

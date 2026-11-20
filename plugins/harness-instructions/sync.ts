@@ -3,10 +3,11 @@
 // (packages/host-runtime/src/harness-user-instructions.ts) without zod or codexhost contracts.
 
 import { createHash, randomUUID } from "node:crypto";
-import { type FSWatcher, watch } from "node:fs";
+import { watch } from "node:fs";
 import { mkdir, open, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { errorText } from "../../daemon/channel.ts";
 import type { TaskContext } from "../types.ts";
 
 /** Harness name, its config root (exists = installed) and its instruction file, relative to HOME. */
@@ -48,41 +49,38 @@ interface Backup {
 
 const SOURCE_DEBOUNCE_MS = 300;
 
-export function backupDir(home = homedir()): string {
-  return join(home, ".config", "codexhost-ui-plugins", "instruction-backups");
-}
-
 /** The Codex instructions to distribute, or null when neither file has content. */
-export async function readSource(home = homedir()): Promise<string | null> {
+async function readSource(): Promise<string | null> {
   for (const name of ["AGENTS.override.md", "AGENTS.md"]) {
-    const content = await readOptional(join(home, ".codex", name));
+    const content = await readOptional(join(homedir(), ".codex", name));
     if (content !== null && content.trim().length > 0) return content;
   }
   return null;
 }
 
 /** Syncs every installed, non-excluded Harness. Returns the names whose file was written. */
-export async function syncInstructions(exclude: ReadonlySet<string>, home = homedir()): Promise<string[]> {
-  const content = await readSource(home);
+async function syncInstructions(exclude: ReadonlySet<string>): Promise<string[]> {
+  const home = homedir();
+  const content = await readSource();
   if (content === null) return [];
   const written: string[] = [];
   const errors: string[] = [];
   for (const [name, root, file] of TARGETS) {
     if (exclude.has(name)) continue;
     try {
-      if (await syncTarget(name, join(home, root), join(home, file), content, home)) written.push(name);
+      if (await syncTarget(name, join(home, root), join(home, file), content)) written.push(name);
     } catch (error) {
-      errors.push(`${name}: ${error instanceof Error ? error.message : String(error)}`);
+      errors.push(`${name}: ${errorText(error)}`);
     }
   }
   if (errors.length > 0) throw new Error(errors.join("; "));
   return written;
 }
 
-async function syncTarget(name: string, rootDir: string, filePath: string, content: string, home: string): Promise<boolean> {
-  const backupPath = join(backupDir(home), `${name}.json`);
+async function syncTarget(name: string, rootDir: string, filePath: string, content: string): Promise<boolean> {
+  if (!(await isDirectory(rootDir))) return false; // not installed, or uninstalled since the last sync
+  const backupPath = join(homedir(), ".config", "codexhost-ui-plugins", "instruction-backups", `${name}.json`);
   const backup = await readBackup(backupPath);
-  if (!backup && !(await isDirectory(rootDir))) return false; // not installed
   // Write through symlinks (dotfile setups) instead of replacing the link with a file.
   const target = await realpath(filePath).catch(() => filePath);
   const current = await readOptional(target);
@@ -124,23 +122,18 @@ export function startInstructionSync(ctx: TaskContext): () => void {
         if (written.length > 0 && !stopped) ctx.log(`synced to ${written.join(", ")}`);
       } while (pending && !stopped);
     } catch (error) {
-      if (!stopped) ctx.fail(`instruction sync failed: ${error instanceof Error ? error.message : String(error)}`);
+      if (!stopped) ctx.fail(`instruction sync failed: ${errorText(error)}`);
     } finally {
       running = false;
     }
   };
 
   // Watch the directory, not the file: editors and Codex replace the file, or create it later.
-  let watcher: FSWatcher;
-  try {
-    watcher = watch(codexDir, (_event, file) => {
-      if (file !== null && file !== "AGENTS.md" && file !== "AGENTS.override.md") return;
-      clearTimeout(timer);
-      timer = setTimeout(() => void run(), SOURCE_DEBOUNCE_MS);
-    });
-  } catch (error) {
-    throw new Error(`cannot watch ${codexDir}: ${error instanceof Error ? error.message : String(error)}`);
-  }
+  const watcher = watch(codexDir, (_event, file) => {
+    if (file !== null && file !== "AGENTS.md" && file !== "AGENTS.override.md") return;
+    clearTimeout(timer);
+    timer = setTimeout(() => void run(), SOURCE_DEBOUNCE_MS);
+  });
   watcher.on("error", (error) => {
     if (!stopped) ctx.fail(`watching ${codexDir} failed: ${error.message}`);
   });

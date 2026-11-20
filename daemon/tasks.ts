@@ -2,7 +2,7 @@
 // or a retry arrive from a page. Task failures are reported to the channel with source "task".
 
 import type { TaskContext } from "../plugins/types.ts";
-import type { Channel, Log } from "./channel.ts";
+import { type Channel, errorText, type Log } from "./channel.ts";
 import type { PluginEntry, Registry } from "./registry.ts";
 
 interface Running {
@@ -11,11 +11,7 @@ interface Running {
   stopped: boolean;
 }
 
-export interface Tasks {
-  stopAll(): void;
-}
-
-export function startTasks(registry: Registry, channel: Channel, log: Log = console.log): Tasks {
+export function startTasks(registry: Registry, channel: Channel, log: Log = console.log): void {
   const running = new Map<string, Running>();
 
   const stop = (id: string) => {
@@ -27,7 +23,7 @@ export function startTasks(registry: Registry, channel: Channel, log: Log = cons
     try {
       run.cleanup?.();
     } catch (error) {
-      log(`${id}: task cleanup failed:`, message(error));
+      log(`${id}: task cleanup failed:`, errorText(error));
     }
   };
 
@@ -51,21 +47,12 @@ export function startTasks(registry: Registry, channel: Channel, log: Log = cons
       fail,
       log: (...args) => log(`${id}:`, ...args),
     };
-    let cleanup: () => void;
     try {
-      cleanup = task(ctx);
+      run.cleanup = task(ctx);
+      if (run.stopped) run.cleanup(); // it called fail() during start, which ran stop() before cleanup existed
     } catch (error) {
-      fail(message(error));
-      return;
+      fail(errorText(error));
     }
-    // A task that called fail() during start is already stopped: clean it up now.
-    if (run.stopped) {
-      try {
-        cleanup();
-      } catch (error) {
-        log(`${id}: task cleanup failed:`, message(error));
-      }
-    } else run.cleanup = cleanup;
   };
 
   channel.onPluginChange((id, change) => {
@@ -78,14 +65,4 @@ export function startTasks(registry: Registry, channel: Channel, log: Log = cons
   });
 
   for (const plugin of registry.plugins) start(plugin);
-
-  return {
-    stopAll() {
-      for (const id of [...running.keys()]) stop(id);
-    },
-  };
-}
-
-function message(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

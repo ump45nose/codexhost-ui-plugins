@@ -93,12 +93,13 @@ describe("channel", () => {
     expect(p.sent).toContainEqual({ type: "response", id: 3, error: "no handler for a.missing" });
   });
 
-  it("retry clears a task failure and notifies listeners; update state is pushed", async () => {
+  it("retry clears page-session failures and notifies listeners; update state is pushed", async () => {
     const { channel } = setup([plugin("a")]);
     const changes: string[] = [];
     channel.onPluginChange((id, change) => changes.push(`${id}:${change}`));
-    channel.setStatus("a", "task", "failed", "disk full");
     const p = page(channel, "s1");
+    p.send({ type: "status", plugin: "a", state: "failed", reason: "no anchor" });
+    expect(channel.aggregate("a").status).toBe("failed");
     p.send({ type: "retry", plugin: "a" });
     expect(channel.aggregate("a").status).toBe("active");
     expect(changes).toEqual(["a:retry"]);

@@ -7,6 +7,7 @@ import { stat } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { errorText } from "../../daemon/channel.ts";
 import type { TaskContext } from "../types.ts";
 
 export const BUNDLE_ID = "com.openai.codex";
@@ -61,7 +62,7 @@ export function pickerTask(run: RunScript = runOsascript): (ctx: TaskContext) =>
         if (dir && !stopped) ctx.log(`default directory set to ${dir}`);
       },
       (error) => {
-        if (!stopped) ctx.fail(error instanceof Error ? error.message : String(error));
+        if (!stopped) ctx.fail(errorText(error));
       },
     );
     return () => {

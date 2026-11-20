@@ -1,25 +1,18 @@
 // Minimal failure notice for stage 1 (main window only); stage 2 replaces it with the panel and toast.
 
 const NOTICE_ID = "cxp-failure-notice";
-const linesByDoc = new WeakMap<Document, Map<string, string>>();
-
-function linesOf(doc: Document): Map<string, string> {
-  let lines = linesByDoc.get(doc);
-  if (!lines) linesByDoc.set(doc, (lines = new Map()));
-  return lines;
-}
+const lines = new Map<string, string>(); // plugin id → line; each page has its own loader bundle
 
 export function showFailureNotice(doc: Document, id: string, name: string, reason: string): void {
-  linesOf(doc).set(id, `插件「${name}」已停用：${reason}`);
+  lines.set(id, `插件「${name}」已停用：${reason}`);
   render(doc);
 }
 
 export function clearFailureNotice(doc: Document, id: string): void {
-  if (linesOf(doc).delete(id)) render(doc);
+  if (lines.delete(id)) render(doc);
 }
 
 function render(doc: Document): void {
-  const lines = linesOf(doc);
   let box = doc.getElementById(NOTICE_ID);
   if (lines.size === 0) {
     box?.remove();

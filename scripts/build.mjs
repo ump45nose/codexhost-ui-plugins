@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Bundles the page loader and every plugin page entry into IIFEs and writes dist/manifest.json
-// and dist/build-id.  Usage: node scripts/build.mjs [--out <dir>]   (default: dist)
+// and dist/build-id.  Usage: node scripts/build.mjs
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -9,10 +9,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import * as esbuild from "esbuild";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const args = process.argv.slice(2);
-const outIndex = args.indexOf("--out");
-if (outIndex !== -1 && !args[outIndex + 1]) throw new Error("--out needs a directory");
-const out = path.resolve(outIndex === -1 ? path.join(root, "dist") : args[outIndex + 1]);
+const out = path.join(root, "dist");
 const target = "chrome120";
 
 function git(...gitArgs) {
@@ -42,8 +39,8 @@ async function loadManifests() {
   const manifests = [];
   for (const id of ids) {
     const mod = await import(pathToFileURL(path.join(dir, id, "plugin.ts")).href);
-    const manifest = mod.default ?? mod.manifest;
-    if (!manifest || manifest.id !== id) throw new Error(`plugins/${id}/plugin.ts must export a manifest with id "${id}"`);
+    const manifest = mod.default;
+    if (manifest?.id !== id) throw new Error(`plugins/${id}/plugin.ts must export default a manifest with id "${id}"`);
     manifests.push(manifest);
   }
   return manifests;
@@ -63,7 +60,7 @@ async function bundle(contents, resolveDir, outfile) {
 
 const buildId = computeBuildId();
 const manifests = await loadManifests();
-const tmp = path.join(path.dirname(out), `.dist-build-${process.pid}`);
+const tmp = path.join(root, `.dist-build-${process.pid}`);
 fs.rmSync(tmp, { recursive: true, force: true });
 
 try {
@@ -80,9 +77,7 @@ try {
       const meta = { forkGuards: m.forkGuards ?? [] };
       await bundle(
         `import activate from ${JSON.stringify(m.page)};\n` +
-          `if (typeof globalThis.__cxpLoaderRegister === "function") ` +
-          `globalThis.__cxpLoaderRegister(${JSON.stringify(m.id)}, activate, ${JSON.stringify(meta)});\n` +
-          `else console.warn("[cxp] loader missing; plugin ${m.id} not started");\n`,
+          `globalThis.__cxpLoaderRegister(${JSON.stringify(m.id)}, activate, ${JSON.stringify(meta)});\n`,
         path.join(root, "plugins", m.id),
         path.join(tmp, file),
       );
@@ -100,7 +95,7 @@ try {
   fs.writeFileSync(path.join(tmp, "build-id"), buildId);
 
   // Swap the finished build in so readers never see a half-written directory.
-  const old = path.join(path.dirname(out), `.dist-old-${process.pid}`);
+  const old = path.join(root, `.dist-old-${process.pid}`);
   const hadOut = fs.existsSync(out);
   if (hadOut) fs.renameSync(out, old);
   fs.renameSync(tmp, out);
@@ -110,4 +105,4 @@ try {
   throw error;
 }
 
-console.log(`built ${buildId}: loader + ${manifests.filter((m) => m.page).length} page plugin(s) -> ${path.relative(root, out) || out}`);
+console.log(`built ${buildId}: loader + ${manifests.filter((m) => m.page).length} page plugin(s) -> dist`);

@@ -15,9 +15,9 @@ export interface DistManifest {
     id: string;
     name: string;
     windows: PageWindow[];
-    file?: string | null;
-    forkGuards?: string[];
-    settings?: SettingField[];
+    file: string | null;
+    forkGuards: string[];
+    settings: SettingField[];
   }>;
 }
 
@@ -38,7 +38,6 @@ export class Registry {
   readonly buildId: string;
   readonly plugins: PluginEntry[];
   #loader: string;
-  #scripts = new Map<PageWindow, string>();
 
   constructor(distDir: string, buildId: string, loader: string, plugins: PluginEntry[]) {
     this.distDir = distDir;
@@ -53,13 +52,9 @@ export class Registry {
 
   /** The script injected into a window: window marker, loader, then every plugin for that window. */
   script(window: PageWindow): string {
-    const cached = this.#scripts.get(window);
-    if (cached !== undefined) return cached;
     const parts = [`globalThis.__cxpWindow = ${JSON.stringify(window)};`, this.#read(this.#loader)];
     for (const p of this.plugins) if (p.file && p.windows.includes(window)) parts.push(this.#read(p.file));
-    const script = parts.join("\n");
-    this.#scripts.set(window, script);
-    return script;
+    return parts.join("\n");
   }
 
   hasEnabledRewrites(): boolean {
@@ -117,10 +112,6 @@ export function defaultSettings(fields: SettingField[]): Record<string, unknown>
   return settings;
 }
 
-export function readBuildId(distDir: string): string {
-  return readFileSync(join(distDir, "build-id"), "utf8").trim();
-}
-
 /** Reads dist/, imports each plugin's manifest from `pluginsDir`, and merges the local config. */
 export async function loadRegistry(distDir: string, pluginsDir: string): Promise<Registry> {
   const manifest = JSON.parse(readFileSync(join(distDir, "manifest.json"), "utf8")) as DistManifest;
@@ -129,19 +120,18 @@ export async function loadRegistry(distDir: string, pluginsDir: string): Promise
   for (const m of manifest.plugins) {
     const url = pathToFileURL(join(pluginsDir, m.id, "plugin.ts")).href;
     const source = ((await import(url)) as { default: PluginManifest }).default;
-    const settingFields = m.settings ?? source.settings ?? [];
     const local = config.plugins[m.id] ?? {};
     plugins.push({
       id: m.id,
       name: m.name,
       windows: m.windows,
-      file: m.file ?? null,
-      settingFields,
+      file: m.file,
+      settingFields: m.settings,
       rewrites: source.rewrites ?? [],
       task: source.task,
       enabled: local.enabled ?? true,
-      settings: { ...defaultSettings(settingFields), ...local.settings },
+      settings: { ...defaultSettings(m.settings), ...local.settings },
     });
   }
-  return new Registry(distDir, readBuildId(distDir), manifest.loader, plugins);
+  return new Registry(distDir, manifest.buildId, manifest.loader, plugins);
 }

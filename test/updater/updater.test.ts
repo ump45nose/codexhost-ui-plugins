@@ -20,15 +20,14 @@ afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
 
-// Fake build: fails when build.txt says "fail", otherwise writes the short SHA as build-id.
+// Fake build: counts runs in ../builds, fails when build.txt says "fail", else writes the short SHA as dist/build-id.
 const fakeBuild = join(root, "fake-build.mjs");
 writeFileSync(
   fakeBuild,
   `import fs from "node:fs"; import { execFileSync } from "node:child_process";
-const out = process.argv[2];
+fs.appendFileSync("../builds", "x");
 if (fs.readFileSync("build.txt", "utf8").trim() === "fail") { console.error("boom: build broken"); process.exit(1); }
-fs.mkdirSync(out, { recursive: true });
-fs.writeFileSync(out + "/build-id", execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim());
+fs.writeFileSync("dist/build-id", execFileSync("git", ["rev-parse", "--short", "HEAD"], { encoding: "utf8" }).trim());
 `,
 );
 
@@ -37,7 +36,7 @@ interface Fixture {
   local: string; // the updater's repo, a clone on main
   updates: UpdateState[];
   logs: string[];
-  builds: number;
+  builds(): number;
   push(files: Record<string, string>): string;
   start(options?: UpdaterOptions): Updater;
   buildId(): string;
@@ -68,7 +67,7 @@ function fixture(populate?: (seed: string) => void): Fixture {
     local,
     updates: [],
     logs: [],
-    builds: 0,
+    builds: () => (existsSync(join(dir, "builds")) ? readFileSync(join(dir, "builds"), "utf8").length : 0),
     push(files) {
       for (const [name, content] of Object.entries(files)) writeFileSync(join(seed, name), content);
       git(seed, "commit", "--quiet", "-am", `change ${Object.keys(files).join(",")}`);
@@ -82,10 +81,7 @@ function fixture(populate?: (seed: string) => void): Fixture {
         {
           intervalMs: 3_600_000,
           npmCi: ["true"],
-          build: (out) => {
-            f.builds++;
-            return [process.execPath, fakeBuild, out];
-          },
+          build: [process.execPath, fakeBuild],
           log: (...args) => f.logs.push(args.join(" ")),
           ...options,
         },
@@ -97,7 +93,7 @@ function fixture(populate?: (seed: string) => void): Fixture {
 }
 
 describe("updater", () => {
-  it("fast-forwards main, builds and swaps dist/ when the remote has a new commit", async () => {
+  it("fast-forwards main and builds dist/ when the remote has a new commit", async () => {
     const f = fixture();
     const target = f.push({ "build.txt": "ok 2\n" });
     const u = f.start();
@@ -165,7 +161,7 @@ describe("updater", () => {
     u.stop();
     expect(git(f.local, "rev-parse", "HEAD")).toBe(before);
     expect(f.buildId()).toBe("old");
-    expect(f.builds).toBe(0);
+    expect(f.builds()).toBe(0);
     expect(f.updates.at(-1)).toEqual({ checkedAt: expect.any(String) });
     expect(f.logs.join("\n")).toContain("uncommitted changes");
   });
@@ -181,7 +177,7 @@ describe("updater", () => {
     await u.check();
     u.stop();
     expect(git(f.local, "rev-parse", "HEAD")).toBe(before);
-    expect(f.builds).toBe(0);
+    expect(f.builds()).toBe(0);
     expect(f.logs.join("\n")).toContain("cannot fast-forward");
   });
 
@@ -198,17 +194,17 @@ describe("updater", () => {
     expect(error).toContain(bad.slice(0, 7));
     expect(error).toContain("build");
     expect(error).toContain("boom: build broken");
-    expect(f.builds).toBe(1);
+    expect(f.builds()).toBe(1);
 
     await u.check(); // same remote commit: no retry, error stays
-    expect(f.builds).toBe(1);
+    expect(f.builds()).toBe(1);
     expect(git(f.local, "rev-parse", "HEAD")).toBe(before);
     expect(f.updates.at(-1)).toEqual({ checkedAt: expect.any(String), error });
 
     const fixed = f.push({ "build.txt": "ok again\n" }); // newer commit: retried
     await u.check();
     u.stop();
-    expect(f.builds).toBe(2);
+    expect(f.builds()).toBe(2);
     expect(f.buildId()).toBe(fixed.slice(0, 7));
     expect(f.updates.at(-1)).toEqual({ checkedAt: expect.any(String) });
   });

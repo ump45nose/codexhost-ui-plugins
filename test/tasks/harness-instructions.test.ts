@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -75,6 +75,12 @@ describe("harness-instructions (C1.6)", () => {
     expect(read(".cursor/AGENTS.md")).toBe("cursor own\n");
     expect(existsSync(join(backups, "cursor-cli.json"))).toBe(false);
     expect(existsSync(join(home, ".qwen"))).toBe(false); // not installed, not created
+
+    // An uninstalled Harness is neither written nor recreated.
+    rmSync(join(home, ".gemini"), { recursive: true });
+    put(".codex/AGENTS.md", "v3\n");
+    await until(() => read(".claude/CLAUDE.md") === "v3\n");
+    expect(existsSync(join(home, ".gemini"))).toBe(false);
     expect(failures).toEqual([]);
   });
 
@@ -88,6 +94,6 @@ describe("harness-instructions (C1.6)", () => {
   });
 
   it("fails when ~/.codex does not exist", () => {
-    expect(() => run([])).toThrow(/cannot watch/);
+    expect(() => run([])).toThrow(/ENOENT/);
   });
 });

@@ -3,6 +3,7 @@ import {
   CXP_PETS_STACK_MAX_HEIGHT_HOOK,
   CXP_PETS_STACK_PATCHED_MARKER,
   CXP_QUICK_CHAT_TARGET_HOOK,
+  hasPetForkRewrite,
   petClientThreadLinkRewrite,
   petQuickChatTargetRewrite,
   petRewrites,
@@ -61,6 +62,13 @@ describe("pet ChunkRewrite rules", () => {
       expect(rule.apply(other)).toBeNull();
     }
     expect(applyAll(other)).toBeNull();
+    expect(petClientThreadLinkRewrite.identify('assertRequestCurrent:n,clientThreadId:o,onSettled:a')).toBe(false);
+  });
+
+  it("recognises the fork's thread-link rewrite without a global marker", () => {
+    expect(hasPetForkRewrite('assertRequestCurrent:s,clientThreadId:"projectless"===F.type||"remoteProject"===F.type?F.clientThreadId:void 0,onSettled:async e=>{}')).toBe(true);
+    expect(hasPetForkRewrite(CREATE_THREAD)).toBe(false);
+    expect(hasPetForkRewrite('assertRequestCurrent:s,clientThreadId:"projectless"===F.type||"remoteProject"===G.type?F.clientThreadId:void 0')).toBe(false);
   });
 
   it("returns null from apply when a recognized chunk no longer matches the expected expression", () => {
@@ -74,7 +82,7 @@ describe("pet ChunkRewrite rules", () => {
     expect(petQuickChatTargetRewrite.apply(brokenQuickChat)).toBeNull();
 
     const brokenLink =
-      'em=await t(e,ea,c,{assertRequestCurrent:l,clientThreadId:N.clientThreadId,onSettled:d})';
+      'em=await t(e,ea,c,{assertRequestCurrent:l,clientThreadId:"projectless"===N.type?N.otherId:void 0,onSettled:d})';
     expect(petClientThreadLinkRewrite.identify(brokenLink)).toBe(true);
     expect(petClientThreadLinkRewrite.apply(brokenLink)).toBeNull();
   });

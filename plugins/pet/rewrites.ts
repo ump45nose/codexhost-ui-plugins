@@ -23,9 +23,16 @@ const QUICK_CHAT_TARGET_MARKER = 'threadSource:"avatar_quick_chat"';
 const QUICK_CHAT_TARGET_EXPRESSION =
   /(threadSource:"avatar_quick_chat",[^;]{0,300}?target:)\{type:"projectless",clientThreadId:([\w$]+)\}/;
 
-const CLIENT_THREAD_LINK_MARKER = /assertRequestCurrent:[\w$]+,clientThreadId:/;
+const CLIENT_THREAD_LINK_MARKER = /assertRequestCurrent:[\w$]+,clientThreadId:"projectless"===/;
 const CLIENT_THREAD_LINK_EXPRESSION =
   /(assertRequestCurrent:[\w$]+,clientThreadId:)"projectless"===([\w$]+)\.type\?\2\.clientThreadId:void 0/;
+// The fork's thread-link rewrite lives in a different chunk from its global markers.
+const FORK_CLIENT_THREAD_LINK_EXPRESSION =
+  /assertRequestCurrent:[\w$]+,clientThreadId:"projectless"===([\w$]+)\.type\|\|"remoteProject"===\1\.type\?\1\.clientThreadId:void 0/;
+
+export function hasPetForkRewrite(source: string): boolean {
+  return PET_FORK_REWRITE_MARKERS.some((marker) => source.includes(marker)) || FORK_CLIENT_THREAD_LINK_EXPRESSION.test(source);
+}
 
 export const petStackMaxHeightRewrite: ChunkRewrite = {
   name: "pet-stack-max-height",

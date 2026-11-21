@@ -1,6 +1,7 @@
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyUrl, Injector } from "../../daemon/injector.ts";
+import { petRewrites } from "../../plugins/pet/rewrites.ts";
 import { FakeCdp, plugin, rule, setup, tick } from "./helpers.ts";
 
 const MAIN = "app://-/index.html";
@@ -205,6 +206,19 @@ describe("rewriter", () => {
     expect(done.method).toBe("Fetch.fulfillRequest");
     expect(decoded(done as never)).toBe('globalThis.__codexhostPetsStackPatched=true; "PET"\n;globalThis.__cxpPetForkRewriteDetected=true;');
     expect((await pause(t, "p", '"PET"')).method).toBe("Fetch.continueRequest");
+    t.cdp.emit("Page.loadEventFired", {}, "p");
+    vi.advanceTimersByTime(10_000);
+    expect(t.channel.aggregate("pet").status).not.toBe("failed");
+  });
+
+  it("suspends on the real fork thread-link chunk before the separate Pet marker chunk arrives", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const t = await petWith([plugin("pet", { windows: ["pet"], rewrites: petRewrites })]);
+    const source = 'assertRequestCurrent:n,clientThreadId:o,onSettled:a});' +
+      'assertRequestCurrent:s,clientThreadId:"projectless"===F.type||"remoteProject"===F.type?F.clientThreadId:void 0,onSettled:async e=>{}';
+    const done = await pause(t, "p", source);
+    expect(done.method).toBe("Fetch.fulfillRequest");
+    expect(decoded(done as never)).toBe(`${source}\n;globalThis.__cxpPetForkRewriteDetected=true;`);
     t.cdp.emit("Page.loadEventFired", {}, "p");
     vi.advanceTimersByTime(10_000);
     expect(t.channel.aggregate("pet").status).not.toBe("failed");

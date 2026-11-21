@@ -3,7 +3,7 @@
 import type { Cdp, CdpResult } from "./cdp.ts";
 import { type Channel, errorText, type Log } from "./channel.ts";
 import type { Registry } from "./registry.ts";
-import { PET_FORK_REWRITE_MARKERS } from "../plugins/pet/rewrites.ts";
+import { hasPetForkRewrite } from "../plugins/pet/rewrites.ts";
 
 const IDENTIFY_TIMEOUT_MS = 10_000;
 
@@ -122,7 +122,7 @@ export class Rewriter {
     let current = source;
     for (const p of this.#registry.plugins) {
       if (!p.enabled || !p.rewrites.length) continue;
-      if (p.id === "pet" && PET_FORK_REWRITE_MARKERS.some((marker) => source.includes(marker))) {
+      if (p.id === "pet" && hasPetForkRewrite(source)) {
         load.dormant.add(p.id);
         load.failed.delete(p.id);
         this.#channel.setStatus(p.id, "rewriter", null);

@@ -49,6 +49,32 @@ stays in use, and the plugin panel shows the error. That commit is not retried; 
 commit is. On another branch or with local changes nothing is pulled, and a manual `npm run build`
 applies the local code the same way.
 
+## How it fits together
+
+- `daemon/` (Node, run as TypeScript) attaches to Desktop's browser endpoint with auto-attach,
+  registers the loader plus every plugin for that window to run on each new document, and
+  releases each paused target even if a setup step fails or times out.
+- `loader/` starts and stops plugins inside the page, isolates each one, and shows the plugin
+  panel (puzzle icon on the left rail) and failure notices. A failing plugin is switched off
+  alone; the others keep running.
+- `plugins/<id>/plugin.ts` declares the windows, settings, fork guards, Pet chunk rewrites
+  (`identify`/`apply`, applied by the daemon through Fetch interception) and local tasks.
+  Daemon-side plugin code must use erasable TypeScript syntax only.
+- `shared/` holds page helpers; each plugin bundle gets its own copy, so plugins never depend on
+  each other at runtime. The stash exposes `window.__cxpStashV1` for the top-tab stash entry.
+- Plugin status is tracked per source (each page, the rewriter, the local task); any failure wins.
+- While a codexhost fork still ships the same feature (its globals or DOM markers, or its own Pet
+  chunk patches), the plugin stays dormant.
+- Only public codexhost page globals, Host methods and Desktop's page structure are used. The Pet
+  plugin also reads Desktop's `~/.codex/.codex-global-state.json` (read only) for remote projects.
+
+## Known issues
+
+- Around page reloads the log can show bursts of `Invalid InterceptionId` from the Pet rewriter;
+  Pet still loads.
+- A failed update commit is remembered in memory only, so it is retried once after a daemon restart.
+- Local tasks import `errorText` from `daemon/channel.ts`.
+
 ## Development
 
 ```sh

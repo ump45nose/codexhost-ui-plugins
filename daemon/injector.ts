@@ -1,7 +1,7 @@
 // Browser-level auto-attach: every Desktop page gets the channel binding and the loader script
 // (registered for new documents and evaluated once now); Pet pages get chunk interception.
 
-import type { Cdp, CdpResult } from "./cdp.ts";
+import { commandWithTimeout, type Cdp, type CdpResult } from "./cdp.ts";
 import { type Channel, errorText, type Log } from "./channel.ts";
 import type { PageWindow } from "./registry.ts";
 import { Rewriter } from "./rewriter.ts";
@@ -64,7 +64,12 @@ export class Injector {
   }
 
   async start(cdp: Cdp): Promise<void> {
-    this.#cdp = cdp;
+    // Keep the safety deadline even with another CDP transport; Rewriter uses this same sender.
+    this.#cdp = {
+      send: (method, params, sid) => commandWithTimeout(method, cdp.send(method, params, sid)),
+      on: (event, handler) => cdp.on(event, handler),
+      close: () => cdp.close(),
+    };
     cdp.on("Target.attachedToTarget", (p) => void this.#attach(p));
     cdp.on("Target.detachedFromTarget", (p) => this.#detach(p.sessionId));
     cdp.on("Runtime.bindingCalled", (p, sid) => {
@@ -80,7 +85,7 @@ export class Injector {
       if (sid) void this.#rewriter.requestPaused(sid, p, this.#pages.get(sid)?.kind === "pet");
     });
     // Browser-level auto-attach also attaches the targets that already exist.
-    await cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
+    await this.#cdp.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true });
   }
 
   /** The connection is gone: forget every page. */
@@ -108,6 +113,10 @@ export class Injector {
     const { type, url } = p.targetInfo as { type: string; url: string };
     const cdp = this.#cdp;
     const candidate = type === "page" && (url === "" || url === "about:blank" || url.startsWith("app://-/"));
+    const attachedAt = Date.now();
+    const target = `${p.targetInfo.targetId ?? "unknown"} session=${sid}`;
+    this.#log(`injector: target attached ${target} at=${new Date(attachedAt).toISOString()} url=${url || "(blank)"} waiting=${Boolean(p.waitingForDebugger)}`);
+    let prepared = candidate ? "failed" : "skipped";
     try {
       if (!candidate) return;
       const kind = classifyUrl(url);
@@ -125,11 +134,32 @@ export class Injector {
         const result = await send("Runtime.evaluate", { expression: this.#script });
         if (result.exceptionDetails) this.#log(`injector: script threw in ${kind}:`, result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
       }
-      this.#log(`injector: attached ${kind ?? "unclassified page"} ${url || "(blank)"}`);
+      prepared = "ready";
     } catch (error) {
-      this.#log(`injector: attach ${url} failed:`, errorText(error));
+      this.#log(`injector: prepare ${target} ${url} failed:`, errorText(error));
     } finally {
-      if (p.waitingForDebugger) await cdp.send("Runtime.runIfWaitingForDebugger", {}, sid).catch(() => undefined);
+      this.#log(`injector: target prepared ${target} at=${new Date().toISOString()} result=${prepared} elapsed=${Date.now() - attachedAt}ms`);
+      // Existing targets can already be waiting when the daemon starts or reconnects even if
+      // attachedToTarget does not report it. The command is harmless when they are running.
+      try {
+        await cdp.send("Runtime.runIfWaitingForDebugger", {}, sid);
+        this.#log(`injector: target released ${target} at=${new Date().toISOString()} elapsed=${Date.now() - attachedAt}ms`);
+      } catch (error) {
+        this.#log(`injector: target release failed ${target} at=${new Date().toISOString()}:`, errorText(error));
+        try {
+          // Detach is handled in the browser and clears its startup throttle even when the
+          // target cannot answer Runtime commands. Other attached pages can keep running.
+          await cdp.send("Target.detachFromTarget", { sessionId: sid });
+          if (this.#cdp === cdp) this.#detach(sid);
+          this.#log(`injector: target released ${target} at=${new Date().toISOString()} recovery=detach elapsed=${Date.now() - attachedAt}ms`);
+        } catch (detachError) {
+          // Dropping the debugger connection detaches all its targets. main.ts then discovers
+          // Desktop again; do not keep the connection that may still be holding startup.
+          this.#log(`injector: target detach failed ${target} at=${new Date().toISOString()}, closing debugger connection:`, errorText(detachError));
+          if (this.#cdp === cdp) this.dispose();
+          cdp.close();
+        }
+      }
     }
     // A Pet loaded before we attached ran its chunks unrewritten: load it again.
     if (this.#pages.get(sid)?.kind === "pet" && !p.waitingForDebugger && this.#rewriter.isEnabled(sid)) {

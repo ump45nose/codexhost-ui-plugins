@@ -8,6 +8,20 @@ export type CdpHandler = (params: CdpResult, sessionId?: string) => void;
 export interface Cdp {
   send(method: string, params?: object, sessionId?: string): Promise<CdpResult>;
   on(event: string, handler: CdpHandler): void;
+  close(): void;
+}
+
+export const COMMAND_TIMEOUT_MS = 5_000;
+
+/** Also bounds injected/test transports, so preparing a paused target always reaches its finally. */
+export function commandWithTimeout<T>(method: string, response: Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`CDP command timed out after ${COMMAND_TIMEOUT_MS} ms (${method})`)), COMMAND_TIMEOUT_MS);
+    response.then(
+      (value) => { clearTimeout(timer); resolve(value); },
+      (error) => { clearTimeout(timer); reject(error); },
+    );
+  });
 }
 
 export class CdpConnection implements Cdp {
@@ -40,11 +54,12 @@ export class CdpConnection implements Cdp {
 
   send(method: string, params: object = {}, sessionId?: string): Promise<CdpResult> {
     const id = this.#nextId++;
-    return new Promise((resolve, reject) => {
+    const response = new Promise<CdpResult>((resolve, reject) => {
       if (this.#ws.readyState !== WebSocket.OPEN) return reject(new Error(`CDP connection closed (${method})`));
       this.#pending.set(id, { resolve, reject, method });
       this.#ws.send(JSON.stringify(sessionId ? { id, method, params, sessionId } : { id, method, params }));
     });
+    return commandWithTimeout(method, response).finally(() => this.#pending.delete(id));
   }
 
   on(event: string, handler: CdpHandler): void {

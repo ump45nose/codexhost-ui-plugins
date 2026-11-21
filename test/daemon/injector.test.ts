@@ -1,5 +1,6 @@
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { COMMAND_TIMEOUT_MS } from "../../daemon/cdp.ts";
 import { classifyUrl, Injector } from "../../daemon/injector.ts";
 import { petRewrites } from "../../plugins/pet/rewrites.ts";
 import { FakeCdp, plugin, rule, setup, tick } from "./helpers.ts";
@@ -11,9 +12,9 @@ const flush = async () => {
 };
 
 async function start(plugins = [plugin("a")], buildId = "build-1") {
-  const { channel, registry } = setup(plugins, buildId);
+  const { channel, registry, logs } = setup(plugins, buildId);
   const cdp = new FakeCdp();
-  const injector = new Injector(channel, () => {});
+  const injector = new Injector(channel, (...args) => logs.push(args));
   await injector.start(cdp);
   const attach = async (sid: string, url: string, waiting = false, type = "page") => {
     cdp.emit("Target.attachedToTarget", { sessionId: sid, targetInfo: { type, url, targetId: `t-${sid}` }, waitingForDebugger: waiting });
@@ -21,7 +22,7 @@ async function start(plugins = [plugin("a")], buildId = "build-1") {
   };
   const hello = (sid: string, window: string, focused: boolean, build = buildId) =>
     cdp.emit("Runtime.bindingCalled", { name: "__cxpDaemon", payload: JSON.stringify({ type: "hello", window, buildId: build, focused }) }, sid);
-  return { cdp, channel, registry, injector, attach, hello };
+  return { cdp, channel, registry, injector, attach, hello, logs };
 }
 
 afterEach(() => {
@@ -60,7 +61,7 @@ describe("injector", () => {
     const t = await start([plugin("pet", { windows: ["pet"], rewrites: [rule("r", () => false, () => null)] })]);
     await t.attach("m", MAIN);
     await t.attach("p", PET);
-    expect(t.cdp.methods("m")).toEqual(["Runtime.enable", "Runtime.addBinding", "Page.enable", "Page.addScriptToEvaluateOnNewDocument", "Runtime.evaluate"]);
+    expect(t.cdp.methods("m")).toEqual(["Runtime.enable", "Runtime.addBinding", "Page.enable", "Page.addScriptToEvaluateOnNewDocument", "Runtime.evaluate", "Runtime.runIfWaitingForDebugger"]);
     expect(t.cdp.methods("p").filter((m) => m === "Page.reload")).toHaveLength(1);
   });
 
@@ -71,6 +72,118 @@ describe("injector", () => {
     expect(t.cdp.methods("p")).not.toContain("Fetch.enable");
     await t.attach("w", "https://chatgpt.com/api/auth/session", true, "webview");
     expect(t.cdp.methods("w")).toEqual(["Runtime.runIfWaitingForDebugger"]);
+  });
+
+  const preparationCommands = [
+    "Runtime.enable", "Runtime.addBinding", "Page.enable", "Network.setCacheDisabled",
+    "Fetch.enable", "Page.addScriptToEvaluateOnNewDocument", "Runtime.evaluate",
+  ];
+
+  it.each(preparationCommands)("releases the target when %s never replies", async (method) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const evaluating = method === "Runtime.evaluate";
+    const t = await start([plugin("pet", { windows: ["pet"], rewrites: [rule("r", () => false, () => null)] })]);
+    t.cdp.responders[method] = () => new Promise(() => {});
+    await t.attach("p", evaluating ? MAIN : PET, !evaluating);
+    expect(t.cdp.methods("p")).not.toContain("Runtime.runIfWaitingForDebugger");
+    await vi.advanceTimersByTimeAsync(COMMAND_TIMEOUT_MS);
+    await flush();
+    expect(t.cdp.methods("p").filter((m) => m === "Runtime.runIfWaitingForDebugger")).toHaveLength(1);
+    expect(t.logs.map((args) => String(args[0])).filter((line) => /target (attached|prepared|released)/.test(line))).toEqual([
+      expect.stringContaining("target attached t-p session=p at="),
+      expect.stringContaining("target prepared t-p session=p at="),
+      expect.stringContaining("target released t-p session=p at="),
+    ]);
+    t.injector.dispose();
+  });
+
+  it.each(preparationCommands)("releases the target when %s fails", async (method) => {
+    const evaluating = method === "Runtime.evaluate";
+    const t = await start([plugin("pet", { windows: ["pet"], rewrites: [rule("r", () => false, () => null)] })]);
+    t.cdp.responders[method] = () => { throw new Error("preparation failed"); };
+    await t.attach("p", evaluating ? MAIN : PET, !evaluating);
+    expect(t.cdp.methods("p").filter((m) => m === "Runtime.runIfWaitingForDebugger")).toHaveLength(1);
+    t.injector.dispose();
+  });
+
+  it("releases existing targets during initial auto-attach and a new connection without relying on the waiting flag", async () => {
+    const { channel } = setup([plugin("a")]);
+    const injector = new Injector(channel, () => {});
+    for (let connection = 0; connection < 2; connection++) {
+      const cdp = new FakeCdp();
+      cdp.responders["Target.setAutoAttach"] = () => {
+        cdp.emit("Target.attachedToTarget", { sessionId: "existing", targetInfo: { type: "page", url: MAIN } });
+        cdp.emit("Target.attachedToTarget", { sessionId: "worker", targetInfo: { type: "worker", url: "" }, waitingForDebugger: false });
+        return {};
+      };
+      await injector.start(cdp);
+      await flush();
+      expect(cdp.methods("existing")).toContain("Runtime.runIfWaitingForDebugger");
+      expect(cdp.methods("worker")).toEqual(["Runtime.runIfWaitingForDebugger"]);
+      injector.dispose();
+    }
+  });
+
+  it.each(["failure", "timeout"])("detaches a waiting target after a release %s and continues handling other targets", async (outcome) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const t = await start();
+    let waiting = true;
+    t.cdp.responders["Runtime.runIfWaitingForDebugger"] = (_params, sid) => {
+      if (sid !== "stuck") return {};
+      if (outcome === "timeout") return new Promise(() => {});
+      throw new Error("cannot release target");
+    };
+    t.cdp.responders["Target.detachFromTarget"] = (params, sid) => {
+      expect(params.sessionId).toBe("stuck");
+      expect(sid).toBeUndefined(); // browser command, independent of the blocked target session
+      waiting = false;
+      return {};
+    };
+    await t.attach("stuck", MAIN, true);
+    if (outcome === "timeout") {
+      expect(waiting).toBe(true);
+      await vi.advanceTimersByTimeAsync(COMMAND_TIMEOUT_MS);
+    }
+    await flush();
+    expect(waiting).toBe(false);
+    expect(t.cdp.closed).toBe(false);
+    expect(t.logs.some((args) => String(args[0]).includes("target release failed t-stuck session=stuck at="))).toBe(true);
+    expect(t.logs.some((args) => String(args[0]).includes("recovery=detach"))).toBe(true);
+    await t.attach("next", MAIN, true);
+    expect(t.cdp.methods("next")).toContain("Runtime.runIfWaitingForDebugger");
+  });
+
+  it.each(["failure", "timeout"])("closes the debugger connection when fallback detach has a %s, then permits reconnection", async (outcome) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const t = await start([plugin("pet", { windows: ["pet"], rewrites: [rule("r", () => false, () => null)] })]);
+    let waiting = true;
+    const close = t.cdp.close.bind(t.cdp);
+    const closed = vi.spyOn(t.cdp, "close").mockImplementation(() => { waiting = false; close(); });
+    t.cdp.responders["Runtime.runIfWaitingForDebugger"] = () => { throw new Error("cannot release target"); };
+    t.cdp.responders["Target.detachFromTarget"] = () => {
+      if (outcome === "timeout") return new Promise(() => {});
+      throw new Error("cannot detach target");
+    };
+    await t.attach("stuck", PET, true);
+    if (outcome === "timeout") {
+      expect(waiting).toBe(true);
+      await vi.advanceTimersByTimeAsync(COMMAND_TIMEOUT_MS);
+    }
+    await flush();
+    expect(waiting).toBe(false);
+    expect(closed).toHaveBeenCalledOnce();
+    expect(t.cdp.closed).toBe(true);
+    expect(t.logs.some((args) => String(args[0]).includes("closing debugger connection"))).toBe(true);
+    // The failed connection must no longer leave pages registered for reloads.
+    const beforeReload = t.cdp.calls.length;
+    await t.injector.reloadPets();
+    expect(t.cdp.calls).toHaveLength(beforeReload);
+    const reconnected = new FakeCdp();
+    await t.injector.start(reconnected);
+    reconnected.emit("Target.attachedToTarget", { sessionId: "reconnected", targetInfo: { type: "page", url: MAIN }, waitingForDebugger: true });
+    await flush();
+    expect(reconnected.methods("reconnected")).toContain("Runtime.runIfWaitingForDebugger");
+    t.injector.dispose();
   });
 
   it("composes the script per window: marker, loader, that window's plugins in manifest order", async () => {

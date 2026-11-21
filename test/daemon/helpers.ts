@@ -14,10 +14,12 @@ export interface Call {
 
 export class FakeCdp implements Cdp {
   calls: Call[] = [];
+  closed = false;
   responders: Record<string, (params: CdpResult, sessionId?: string) => CdpResult> = {};
   #handlers = new Map<string, CdpHandler[]>();
 
   async send(method: string, params: object = {}, sessionId?: string): Promise<CdpResult> {
+    if (this.closed) throw new Error(`CDP connection closed (${method})`);
     this.calls.push({ method, params, sessionId });
     return this.responders[method]?.(params, sessionId) ?? {};
   }
@@ -28,6 +30,10 @@ export class FakeCdp implements Cdp {
 
   emit(event: string, params: CdpResult, sessionId?: string): void {
     for (const h of this.#handlers.get(event) ?? []) h(params, sessionId);
+  }
+
+  close(): void {
+    this.closed = true;
   }
 
   /** Methods sent to a session, without the channel's state pushes. */

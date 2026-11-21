@@ -1,7 +1,7 @@
 // Page-side loader: talks to the daemon over the page channel, starts each plugin in isolation,
 // puts plugins to sleep while a fork guard is present, and exposes window.__cxpLoaderV1.
 import type { PluginApi, PluginStatus, SettingField } from "../plugins/types.ts";
-import { clearFailureNotice, showFailureNotice } from "./ui/notice.ts";
+import { mountLoaderUi } from "./ui/index.ts";
 
 export type WindowKind = "main" | "pet";
 export type Activate = (api: PluginApi) => void | (() => void);
@@ -224,7 +224,6 @@ export function startLoader(win: LoaderWindow, buildId: string): void {
     }
     activating = false;
     if (pendingFail !== undefined) return fail(slot, pendingFail);
-    if (kind === "main") clearFailureNotice(doc, slot.id);
     setStatus(slot, "active");
   }
   function stop(slot: Slot): void {
@@ -244,7 +243,6 @@ export function startLoader(win: LoaderWindow, buildId: string): void {
     stop(slot);
     slot.failed = true;
     setStatus(slot, "failed", reason);
-    if (kind === "main") showFailureNotice(doc, slot.id, entry(slot.id)?.name ?? slot.id, reason);
   }
   function guardTick(): void {
     const now = Date.now();
@@ -297,6 +295,7 @@ export function startLoader(win: LoaderWindow, buildId: string): void {
     },
   };
   win.__cxpLoaderV1 = api;
+  if (kind === "main") mountLoaderUi(win, api);
 
   win.addEventListener("focus", () => send({ type: "focus", focused: true }));
   win.addEventListener("blur", () => send({ type: "focus", focused: false }));

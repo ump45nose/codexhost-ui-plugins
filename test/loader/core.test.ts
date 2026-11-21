@@ -45,7 +45,8 @@ describe("loader isolation (C1.4)", () => {
     expect(okCleanup).not.toHaveBeenCalled();
     expect(page.statuses("thrower")).toEqual(["failed"]);
     expect(page.statuses("ok")).toEqual(["active"]);
-    expect(page.doc.getElementById("cxp-failure-notice")?.textContent).toContain("插件「thrower」已停用：boom");
+    expect(page.doc.getElementById("cxp-toast")?.hidden).toBe(false);
+    expect(page.doc.getElementById("cxp-toast")?.textContent).toContain("插件「later-fail」已停用：element vanished");
 
     // A failed plugin stays down on later state pushes until retried.
     page.push([{ id: "thrower" }, { id: "sync-fail" }, { id: "later-fail" }, { id: "ok" }]);
@@ -67,17 +68,19 @@ describe("loader isolation (C1.4)", () => {
     expect(page.loader().getState().local.flaky?.status).toBe("failed");
     page.push([{ id: "flaky" }]); // the daemon cleared the page failure
     expect(page.loader().getState().local.flaky?.status).toBe("active");
-    expect(page.doc.getElementById("cxp-failure-notice")?.textContent ?? "").not.toContain("flaky");
+    expect(page.doc.getElementById("cxp-toast")?.hidden).toBe(true);
   });
 
-  it("does not show the notice in the pet window", () => {
+  it("does not mount loader UI in the pet window", () => {
     const page = setup("pet");
     page.register("thrower", () => {
       throw new Error("boom");
     });
     page.push([{ id: "thrower" }]);
     expect(page.loader().getState().local.thrower?.status).toBe("failed");
-    expect(page.doc.getElementById("cxp-failure-notice")).toBeNull();
+    expect(page.doc.getElementById("cxp-toast")).toBeNull();
+    expect(page.doc.getElementById("cxp-plugin-panel")).toBeNull();
+    expect(page.doc.getElementById("cxp-rail-entry")).toBeNull();
   });
 });
 

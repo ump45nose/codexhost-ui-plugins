@@ -75,6 +75,18 @@ describe("installation preserves configuration", () => {
     expect(readdirSync(f.configDir)).toEqual(["config.json"]);
   });
 
+  it("fills an empty picker directory in place while retaining its other settings", () => {
+    const config = { plugins: { "project-picker": { enabled: false, settings: { defaultDirectory: "", keep: 123 } } } };
+    const f = fixture(JSON.stringify(config));
+    const before = statSync(f.configPath);
+    f.install("--picker-dir", f.root);
+    expect(JSON.parse(readFileSync(f.configPath, "utf8"))).toEqual({
+      plugins: { "project-picker": { enabled: false, settings: { defaultDirectory: f.root, keep: 123 } } },
+    });
+    expect(statSync(f.configPath).ino).toBe(before.ino);
+    expect(readdirSync(f.configDir)).toEqual(["config.json"]);
+  });
+
   it("retains a complete existing configuration when no picker directory is supplied", () => {
     const original = '{"plugins":{"pet":{"enabled":false}},"custom":17}\n';
     const f = fixture(original);

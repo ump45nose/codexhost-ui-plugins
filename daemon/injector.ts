@@ -21,6 +21,7 @@ interface Page {
   kind: PageWindow | null;
   focused: boolean | null; // main window only; null until its hello or a focus message arrives
   stale: boolean; // its last hello reported a build other than the one on disk
+  scriptRegistered: boolean;
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -120,21 +121,15 @@ export class Injector {
     try {
       if (!candidate) return;
       const kind = classifyUrl(url);
-      this.#pages.set(sid, { kind, focused: null, stale: false });
-      const send = (method: string, params: object = {}) => cdp.send(method, params, sid);
-      // Without Runtime.enable the binding is gone after the next reload.
-      await send("Runtime.enable");
-      await send("Runtime.addBinding", { name: BINDING });
-      await send("Page.enable");
-      const mayBePet = kind === "pet" || (kind === null && !url.startsWith("app://"));
-      if (mayBePet && this.#channel.registry.hasEnabledRewrites()) await this.#rewriter.enable(sid);
-      await send("Page.addScriptToEvaluateOnNewDocument", { source: this.#script });
-      if (kind) this.#addToChannel(sid, kind);
-      if (kind && !p.waitingForDebugger) {
-        const result = await send("Runtime.evaluate", { expression: this.#script });
-        if (result.exceptionDetails) this.#log(`injector: script threw in ${kind}:`, result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
+      this.#pages.set(sid, { kind, focused: null, stale: false, scriptRegistered: false });
+      if (p.waitingForDebugger && (url === "" || url === "about:blank")) {
+        // A new blank renderer may not answer Runtime.enable until it is released. Prepare it
+        // afterwards instead of spending the entire command deadline waiting on that cycle.
+        prepared = "deferred";
+      } else {
+        await this.#prepare(cdp, sid, url, Boolean(p.waitingForDebugger));
+        prepared = "ready";
       }
-      prepared = "ready";
     } catch (error) {
       this.#log(`injector: prepare ${target} ${url} failed:`, errorText(error));
     } finally {
@@ -161,9 +156,46 @@ export class Injector {
         }
       }
     }
+    if ((prepared === "failed" || prepared === "deferred") && this.#cdp === cdp && this.#pages.has(sid)) {
+      try {
+        await this.#prepare(cdp, sid, url, false, true);
+        prepared = "recovered";
+        this.#log(`injector: target injected ${target} at=${new Date().toISOString()} after-release elapsed=${Date.now() - attachedAt}ms`);
+      } catch (error) {
+        this.#log(`injector: injection after release failed ${target} at=${new Date().toISOString()}:`, errorText(error));
+      }
+    }
     // A Pet loaded before we attached ran its chunks unrewritten: load it again.
-    if (this.#pages.get(sid)?.kind === "pet" && !p.waitingForDebugger && this.#rewriter.isEnabled(sid)) {
+    if (this.#pages.get(sid)?.kind === "pet" && (prepared === "recovered" || !p.waitingForDebugger) && this.#rewriter.isEnabled(sid)) {
       await this.#reload(sid).catch((error) => this.#log("injector: Pet reload failed:", errorText(error)));
+    }
+  }
+
+  async #prepare(cdp: Cdp, sid: string, url: string, waiting: boolean, afterRelease = false): Promise<void> {
+    const send = (method: string, params: object = {}) => cdp.send(method, params, sid);
+    // Without Runtime.enable the binding is gone after the next reload.
+    await send("Runtime.enable");
+    await send("Runtime.addBinding", { name: BINDING });
+    await send("Page.enable");
+    if (afterRelease) {
+      // Navigation may have finished before Page.enable, so waiting for frameNavigated alone
+      // would leave an already complete Pet unclassified and its loader unevaluated.
+      const { frameTree } = await send("Page.getFrameTree");
+      url = frameTree?.frame?.url ?? url;
+      await this.#navigated(sid, url);
+    }
+    const page = this.#pages.get(sid);
+    if (!page || this.#cdp !== cdp) return;
+    const mayBePet = page.kind === "pet" || (page.kind === null && !url.startsWith("app://"));
+    if (mayBePet && this.#channel.registry.hasEnabledRewrites() && !this.#rewriter.isEnabled(sid)) await this.#rewriter.enable(sid);
+    if (!page.scriptRegistered) {
+      await send("Page.addScriptToEvaluateOnNewDocument", { source: this.#script });
+      page.scriptRegistered = true;
+    }
+    if (page.kind) this.#addToChannel(sid, page.kind);
+    if (page.kind && !waiting) {
+      const result = await send("Runtime.evaluate", { expression: this.#script });
+      if (result.exceptionDetails) this.#log(`injector: script threw in ${page.kind}:`, result.exceptionDetails.exception?.description ?? result.exceptionDetails.text);
     }
   }
 

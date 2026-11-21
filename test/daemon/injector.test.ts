@@ -25,6 +25,23 @@ async function start(plugins = [plugin("a")], buildId = "build-1") {
   return { cdp, channel, registry, injector, attach, hello, logs };
 }
 
+/** A complete document can precede Page.enable, so no frameNavigated event is replayed. */
+function documentAt(t: Awaited<ReturnType<typeof start>>, href: string) {
+  const location = { href };
+  const context: Record<string, unknown> = { location, URL };
+  let newDocumentScript = "";
+  t.cdp.responders["Page.getFrameTree"] = () => ({ frameTree: { frame: { id: "root", url: location.href } } });
+  t.cdp.responders["Page.addScriptToEvaluateOnNewDocument"] = (params) => {
+    newDocumentScript = params.source;
+    return { identifier: "loader" };
+  };
+  t.cdp.responders["Runtime.evaluate"] = (params) => {
+    if (params.expression.startsWith("switch (")) runInNewContext(params.expression, context);
+    return { result: { value: false } };
+  };
+  return { context, navigate(url: string) { location.href = url; runInNewContext(newDocumentScript, context); } };
+}
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -103,6 +120,72 @@ describe("injector", () => {
     t.cdp.responders[method] = () => { throw new Error("preparation failed"); };
     await t.attach("p", evaluating ? MAIN : PET, !evaluating);
     expect(t.cdp.methods("p").filter((m) => m === "Runtime.runIfWaitingForDebugger")).toHaveLength(1);
+    t.injector.dispose();
+  });
+
+  it.each(["", "about:blank"])("releases a paused blank target (%s) before Runtime.enable and injects its already complete Pet", async (url) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const t = await start([plugin("pet", { windows: ["pet"] })]);
+    const doc = documentAt(t, PET);
+    let released = false;
+    t.cdp.responders["Runtime.enable"] = () => released ? {} : new Promise(() => {});
+    t.cdp.responders["Runtime.runIfWaitingForDebugger"] = () => { released = true; return {}; };
+    const started = Date.now();
+    await t.attach("cold", url, true);
+    expect(released).toBe(true);
+    expect(t.cdp.methods("cold")[0]).toBe("Runtime.runIfWaitingForDebugger");
+    expect(doc.context.__cxpWindow).toBe("pet");
+    expect(doc.context.__cxpLoaderV1).toEqual({});
+    expect(Date.now() - started).toBeLessThan(10_000);
+    expect(t.logs.some((args) => String(args[0]).includes("after-release"))).toBe(true);
+    t.hello("cold", "pet", false);
+    await flush();
+    expect(t.cdp.calls.some((call) => call.sessionId === "cold" && String(call.params.expression).startsWith("window.__cxpReceive"))).toBe(true);
+    t.injector.dispose();
+  });
+
+  it.each(["failure", "timeout"])("retries preparation after releasing a target when Runtime.enable has a %s, including a missed Pet navigation", async (outcome) => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const t = await start([plugin("pet", { windows: ["pet"], rewrites: [rule("r", () => false, () => null)] })]);
+    const doc = documentAt(t, PET);
+    let released = false;
+    t.cdp.responders["Runtime.enable"] = () => {
+      if (released) return {};
+      if (outcome === "timeout") return new Promise(() => {});
+      throw new Error("renderer not ready");
+    };
+    t.cdp.responders["Runtime.runIfWaitingForDebugger"] = () => { released = true; return {}; };
+    const started = Date.now();
+    await t.attach("recover", PET, true);
+    if (outcome === "timeout") {
+      expect(doc.context.__cxpLoaderV1).toBeUndefined();
+      expect(released).toBe(false);
+      await vi.advanceTimersByTimeAsync(COMMAND_TIMEOUT_MS);
+      await flush();
+    }
+    expect(released).toBe(true);
+    expect(doc.context.__cxpWindow).toBe("pet");
+    expect(doc.context.__cxpLoaderV1).toEqual({});
+    const methods = t.cdp.methods("recover");
+    expect(methods.indexOf("Runtime.runIfWaitingForDebugger")).toBeLessThan(methods.lastIndexOf("Runtime.enable"));
+    expect(methods.filter((method) => method === "Page.addScriptToEvaluateOnNewDocument")).toHaveLength(1);
+    expect(methods.filter((method) => method === "Page.reload")).toHaveLength(1);
+    expect(Date.now() - started).toBeLessThan(10_000);
+    t.injector.dispose();
+  });
+
+  it("keeps the loader registered when a released blank page navigates to Pet later", async () => {
+    const t = await start([plugin("pet", { windows: ["pet"] })]);
+    const doc = documentAt(t, "about:blank");
+    await t.attach("later", "about:blank", true);
+    expect(doc.context.__cxpLoaderV1).toBeUndefined();
+    t.cdp.emit("Page.frameNavigated", { frame: { id: "root", url: PET } }, "later");
+    doc.navigate(PET);
+    t.hello("later", "pet", false);
+    await flush();
+    expect(doc.context.__cxpWindow).toBe("pet");
+    expect(doc.context.__cxpLoaderV1).toEqual({});
+    expect(t.cdp.calls.some((call) => call.sessionId === "later" && String(call.params.expression).startsWith("window.__cxpReceive"))).toBe(true);
     t.injector.dispose();
   });
 

@@ -54,7 +54,8 @@ configure() {
     changed = true;
   }
   const directory = process.env.CXP_PICKER_DIR;
-  if (directory && config.plugins["project-picker"]?.settings?.defaultDirectory === undefined) {
+  const existingDirectory = config.plugins["project-picker"]?.settings?.defaultDirectory;
+  if (directory && (existingDirectory === undefined || existingDirectory === "")) {
     const entry = (config.plugins["project-picker"] ??= {});
     (entry.settings ??= {}).defaultDirectory = directory;
     changed = true;

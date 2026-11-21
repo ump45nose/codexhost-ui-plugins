@@ -43,7 +43,7 @@ export function createPluginPanel(
 
   let latest = loader.getState();
   const attach = () => {
-    if (!panel.isConnected && doc.body && typeof doc.body.append === "function") doc.body.append(panel);
+    if (!panel.isConnected && doc.body) doc.body.append(panel);
   };
   const setOpen = (open: boolean) => {
     attach();
@@ -55,29 +55,28 @@ export function createPluginPanel(
 
   const onDocClick = (e: Event) => {
     if (panel.hidden) return;
-    if (e.target && typeof panel.contains === "function" && panel.contains(e.target as Node)) return;
+    if (e.target && panel.contains(e.target as Node)) return;
     if (options.isInsideTrigger?.(e.target)) return;
     setOpen(false);
   };
   const onKeyDown = (e: Event) => {
     if (!panel.hidden && (e as KeyboardEvent).key === "Escape") setOpen(false);
   };
-  doc.addEventListener?.("click", onDocClick);
-  doc.addEventListener?.("keydown", onKeyDown);
+  doc.addEventListener("click", onDocClick);
+  doc.addEventListener("keydown", onKeyDown);
 
   function render(state: LoaderState): void {
-    latest = state;
     attach();
     const activeEl = doc.activeElement as HTMLInputElement | null;
-    const activeKey = typeof activeEl?.getAttribute === "function" ? activeEl.getAttribute("data-cxp-field") : null;
+    const activeKey = activeEl && panel.contains(activeEl) ? activeEl.getAttribute("data-cxp-field") : null;
+    const selStart = activeKey ? activeEl!.selectionStart : null;
+    const selEnd = activeKey ? activeEl!.selectionEnd : null;
 
-    if (typeof list.replaceChildren === "function") list.replaceChildren();
-    else list.textContent = "";
-
+    list.replaceChildren();
     if (!state.daemon) {
-      list.append?.(el(doc, "div", { className: "cxp-row", text: "正在连接常驻程序…" }));
+      list.append(el(doc, "div", { className: "cxp-row", text: "正在连接常驻程序…" }));
     } else {
-      for (const p of resolvePlugins(state)) list.append?.(renderRow(p, activeKey, activeEl));
+      for (const p of resolvePlugins(state)) list.append(renderRow(p, activeKey, activeEl));
     }
 
     const buildId = state.daemon?.buildId ?? state.buildId;
@@ -86,6 +85,14 @@ export function createPluginPanel(
     footerText.textContent = upd?.error
       ? `更新失败：${upd.error}，仍在运行 ${buildId} · 看日志 ~/Library/Logs/codexhost-ui-plugins`
       : `版本 ${buildId} · ${formatCheckedAt(upd?.checkedAt)}`;
+
+    if (activeKey) {
+      const next = list.querySelector(`[data-cxp-field="${activeKey}"]`) as HTMLInputElement | null;
+      if (next) {
+        next.focus();
+        if (next.type === "text" && selStart !== null && selEnd !== null) next.setSelectionRange(selStart, selEnd);
+      }
+    }
   }
 
   function renderRow(p: ResolvedPlugin, activeKey: string | null, activeEl: HTMLInputElement | null): HTMLElement {
@@ -110,10 +117,10 @@ export function createPluginPanel(
     if (p.status === "failed") {
       const retry = el(doc, "button", { type: "button", text: "重试" });
       retry.addEventListener("click", () => loader.retry(p.id));
-      row.append?.(el(doc, "div", { className: "cxp-reason" }, el(doc, "span", { text: p.reason || "未知原因" }), retry));
+      row.append(el(doc, "div", { className: "cxp-reason" }, el(doc, "span", { text: p.reason || "未知原因" }), retry));
     }
     if (p.settingFields.length > 0) {
-      row.append?.(el(doc, "div", { className: "cxp-set" }, ...p.settingFields.map((f) => renderField(p, f, activeKey, activeEl))));
+      row.append(el(doc, "div", { className: "cxp-set" }, ...p.settingFields.map((f) => renderField(p, f, activeKey, activeEl))));
     }
     return row;
   }
@@ -179,16 +186,19 @@ export function createPluginPanel(
     return el(doc, "div", { className: "cxp-field" }, el(doc, "label", { text: field.label }), input);
   }
 
-  render(latest);
+  attach();
   return {
     element: panel,
     open: () => setOpen(true),
     close: () => setOpen(false),
     toggle: () => setOpen(Boolean(panel.hidden)),
-    update: render,
+    update(state) {
+      latest = state;
+      if (!panel.hidden) render(state);
+    },
     destroy() {
-      doc.removeEventListener?.("click", onDocClick);
-      doc.removeEventListener?.("keydown", onKeyDown);
+      doc.removeEventListener("click", onDocClick);
+      doc.removeEventListener("keydown", onKeyDown);
       panel.remove();
     },
   };

@@ -43,6 +43,7 @@ function setupWithRail(kind: "main" | "pet" = "main") {
   const page = fakeWindow(kind);
   activeDoc = page.doc;
   const nav = page.doc.createElement("nav");
+  nav.setAttribute("aria-label", "App navigation");
   const topIcon = page.doc.createElement("button");
   topIcon.textContent = "⌂";
   const bang = page.doc.createElement("button");
@@ -56,11 +57,16 @@ function setupWithRail(kind: "main" | "pet" = "main") {
 }
 
 describe("plugin panel (C2.1)", () => {
-  it("handles null daemon state before first push, then lists all plugins and statuses", () => {
+  it("skips render while hidden, then renders null daemon state and all plugin statuses when opened", () => {
     const page = setupWithRail();
+    const entry = page.doc.getElementById(RAIL_ENTRY_ID)!;
     const panel = page.doc.getElementById(PANEL_ID)!;
     expect(panel).not.toBeNull();
     expect(panel.hidden).toBe(true);
+    expect(panel.querySelectorAll(".cxp-row")).toHaveLength(0);
+
+    entry.click();
+    expect(panel.hidden).toBe(false);
     expect(panel.textContent).toContain("正在连接常驻程序");
     expect(panel.textContent).toContain("版本 51f19c9 · 尚未检查更新");
 
@@ -92,6 +98,7 @@ describe("plugin panel (C2.1)", () => {
 
   it("toggles enable switch and calls setEnabled, and clicks retry to call retry", () => {
     const page = setupWithRail();
+    page.doc.getElementById(RAIL_ENTRY_ID)!.click();
     page.push([
       { id: "stash", name: "收纳箱", enabled: true, status: "active" },
       { id: "pet", name: "Pet", enabled: true, status: "failed", source: "rewriter", reason: "chunk changed" },
@@ -116,6 +123,7 @@ describe("plugin panel (C2.1)", () => {
 
   it("renders and commits text, toggle, number (with min/max/step), and exclude-list settings", () => {
     const page = setupWithRail();
+    page.doc.getElementById(RAIL_ENTRY_ID)!.click();
     page.push([
       {
         id: "demo",
@@ -139,11 +147,33 @@ describe("plugin panel (C2.1)", () => {
 
     const panel = page.doc.getElementById(PANEL_ID)!;
 
-    // text
+    // text (also verify focus and selection survive background state push)
     const textInput = panel.querySelector('[data-cxp-field="demo:dir"]')!;
     expect(textInput.value).toBe("~/Developer");
+    textInput.focus();
     textInput.value = "~/Work";
-    textInput.dispatchEvent({ type: "change" });
+    textInput.setSelectionRange(2, 6);
+    page.push([
+      {
+        id: "demo",
+        name: "演示插件",
+        enabled: true,
+        status: "active",
+        settings: { dir: "~/Developer", compact: false, width: 900, exclude: ["Kiro"] },
+        settingFields: [
+          { key: "dir", type: "text", label: "默认目录", default: "" },
+          { key: "compact", type: "toggle", label: "紧凑模式", default: false },
+          { key: "width", type: "number", label: "断点宽度", default: 900, min: 400, max: 1600, step: 50 },
+          { key: "exclude", type: "exclude-list", label: "排除目标", options: ["Claude Code", "Gemini", "Kiro"], default: [] },
+        ],
+      },
+    ]);
+    const textInputAfter = panel.querySelector('[data-cxp-field="demo:dir"]')!;
+    expect(page.doc.activeElement).toBe(textInputAfter);
+    expect(textInputAfter.value).toBe("~/Work");
+    expect(textInputAfter.selectionStart).toBe(2);
+    expect(textInputAfter.selectionEnd).toBe(6);
+    textInputAfter.dispatchEvent({ type: "change" });
     expect(page.sent.at(-1)).toEqual({ type: "settings:set", plugin: "demo", values: { dir: "~/Work" } });
 
     // toggle
@@ -177,6 +207,7 @@ describe("plugin panel (C2.1)", () => {
 
   it("shows update error in footer when update.error is present", () => {
     const page = setupWithRail();
+    page.doc.getElementById(RAIL_ENTRY_ID)!.click();
     page.push([], {
       buildId: "51f19c9",
       update: { checkedAt: "2026-11-21T09:59:00.000Z", error: "打包出错" },
@@ -212,6 +243,114 @@ describe("rail entry, toast, and pet isolation (C2.2)", () => {
     entry.remove();
     expect(entry.parentNode).toBe(page.nav);
     expect(entry.nextSibling).toBe(page.bang);
+  });
+
+  it("mounts above Usage in Desktop's narrow App navigation rail and ignores thread rows in Home nav", () => {
+    const page = fakeWindow("main");
+    activeDoc = page.doc;
+
+    const rail = page.doc.createElement("nav");
+    rail.setAttribute("aria-label", "App navigation");
+    rail.setRect({ left: 0, width: 68, top: 0, height: 800, right: 68, bottom: 800 });
+    const usage = page.doc.createElement("button");
+    usage.setAttribute("aria-label", "Usage");
+    const avatar = page.doc.createElement("button");
+    avatar.setAttribute("aria-label", "Account");
+    rail.append(usage, avatar);
+
+    const homeNav = page.doc.createElement("nav");
+    homeNav.setAttribute("aria-label", "Home");
+    homeNav.setRect({ left: 68, width: 260, top: 0, height: 800, right: 328, bottom: 800 });
+    const threadRow = page.doc.createElement("button");
+    threadRow.setAttribute("aria-label", "排查一个奇怪的问题");
+    homeNav.append(threadRow);
+
+    page.doc.body.append(rail, homeNav);
+    startLoader(page.win, "51f19c9");
+
+    const entry = page.doc.getElementById(RAIL_ENTRY_ID)!;
+    expect(entry.parentNode).toBe(rail);
+    expect(entry.nextSibling).toBe(usage);
+  });
+
+  it("throttles fallback anchor lookups during DOM mutations and attaches once the narrow rail appears", () => {
+    const page = fakeWindow("main");
+    activeDoc = page.doc;
+    startLoader(page.win, "51f19c9");
+
+    const entry = page.doc.getElementById(RAIL_ENTRY_ID)!;
+    expect(entry.classList.contains("cxp-plug-fallback")).toBe(true);
+
+    // Wide Home nav should not steal the entry even with matching text.
+    const homeNav = page.doc.createElement("nav");
+    homeNav.setAttribute("aria-label", "Home");
+    homeNav.setRect({ left: 68, width: 260, top: 0, height: 800, right: 328, bottom: 800 });
+    const issueBtn = page.doc.createElement("button");
+    issueBtn.setAttribute("aria-label", "问题反馈");
+    homeNav.append(issueBtn);
+    page.doc.body.append(homeNav);
+    vi.advanceTimersByTime(300);
+    expect(entry.classList.contains("cxp-plug-fallback")).toBe(true);
+
+    // Narrow rail appears -> throttled timer moves entry above the last button.
+    const rail = page.doc.createElement("nav");
+    rail.setRect({ left: 0, width: 68, top: 0, height: 800, right: 68, bottom: 800 });
+    const b1 = page.doc.createElement("button");
+    const b2 = page.doc.createElement("button");
+    rail.append(b1, b2);
+    page.doc.body.append(rail);
+    expect(entry.classList.contains("cxp-plug-fallback")).toBe(true); // throttled, not sync
+    vi.advanceTimersByTime(250);
+    expect(entry.classList.contains("cxp-plug-fallback")).toBe(false);
+    expect(entry.parentNode).toBe(rail);
+    expect(entry.nextSibling).toBe(b2);
+  });
+
+  it("lifts past nested row wrappers into the flex-col bottom container above the empty Usage slot", () => {
+    const page = fakeWindow("main");
+    activeDoc = page.doc;
+
+    const rail = page.doc.createElement("nav");
+    rail.setAttribute("aria-label", "App navigation");
+    rail.setRect({ left: 0, width: 68, top: 0, height: 1040, right: 68, bottom: 1040 });
+
+    const topGroup = page.doc.createElement("div");
+    const topSettings = page.doc.createElement("button");
+    topSettings.setAttribute("aria-label", "打开 codexhost 设置");
+    topGroup.append(topSettings);
+
+    const bottomShell = page.doc.createElement("div");
+    bottomShell.className = "relative shrink-0 w-9";
+    const flexCol = page.doc.createElement("div");
+    flexCol.className = "flex items-center flex-col gap-2";
+    const usageSlot = page.doc.createElement("div");
+    usageSlot.className = "flex items-center empty:hidden flex-col gap-2";
+    const rowOuter = page.doc.createElement("div");
+    rowOuter.className = "flex w-full";
+    const rowMid = page.doc.createElement("div");
+    rowMid.className = "flex sidebar-item justify-center";
+    const rowInner = page.doc.createElement("div");
+    rowInner.className = "flex min-w-0 flex-1 justify-center";
+    const profileBtn = page.doc.createElement("button");
+    profileBtn.setAttribute("aria-label", "Open profile menu");
+    rowInner.append(profileBtn);
+    rowMid.append(rowInner);
+    rowOuter.append(rowMid);
+    flexCol.append(usageSlot, rowOuter);
+    bottomShell.append(flexCol);
+
+    rail.append(topGroup, bottomShell);
+    page.doc.body.append(rail);
+    startLoader(page.win, "51f19c9");
+
+    const entry = page.doc.getElementById(RAIL_ENTRY_ID)!;
+    expect(entry.parentNode).toBe(flexCol);
+    expect(entry.nextSibling).toBe(usageSlot);
+
+    // Re-running ensureMounted / React re-render remains idempotent above usageSlot.
+    entry.remove();
+    expect(entry.parentNode).toBe(flexCol);
+    expect(entry.nextSibling).toBe(usageSlot);
   });
 
   it("updates red dot and shows toast once per (plugin, reason) per page load", () => {

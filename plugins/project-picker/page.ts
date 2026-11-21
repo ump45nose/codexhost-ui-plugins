@@ -428,9 +428,11 @@ export function installProjectPickerPage(api: PluginApi, options: InstallProject
   const defaultDirectory = typeof api.settings.defaultDirectory === "string" ? api.settings.defaultDirectory.trim() : "";
 
   let disposed = false;
+  let failed = false;
   let installing = false;
   let reconciling = false;
   let retryTicks = 0;
+  let lastError: string | null = null;
   let retryTimer: ReturnType<typeof setInterval> | null = null;
   let installed: NativeWorkspaceFilesServices | null = null;
   let origFiles: NativeWorkspaceFiles | null = null;
@@ -439,25 +441,31 @@ export function installProjectPickerPage(api: PluginApi, options: InstallProject
   let wrappedProjects: NativeProjectsService | null = null;
 
   const stopRetry = () => { if (retryTimer !== null) { clearInterval(retryTimer); retryTimer = null; } };
+  const failDiscovery = (reason: string) => {
+    if (disposed || failed || installed !== null) return;
+    failed = true; stopRetry(); api.fail(reason);
+  };
   const applyDefaultDir = () => {
     if (disposed || !defaultDirectory) return;
     void api.request("applyDefaultDirectory").catch((err) => { if (!disposed) api.log("applyDefaultDirectory failed", err); });
   };
   const syncProjects = () => {
-    if (disposed) return;
-    refreshAccountScopedGlobalState(ownerWindow, installed);
-    if (!installed || reconciling) return;
+    if (disposed || !installed || reconciling) return;
     reconciling = true;
     void reconcileDuplicateLocalProjects(installed, ownerWindow).catch(() => false).finally(() => { reconciling = false; });
   };
 
   const tryInstall = () => {
-    if (disposed || installing || installed !== null) return;
+    if (disposed || failed || installing || installed !== null) return;
     installing = true;
     void (async () => {
       try {
         const services = await loadCodexNativeServices(ownerWindow, isNativeWorkspaceFilesServices, options.importModule);
-        if (disposed || !services || installed !== null) return;
+        if (disposed || installed !== null) return;
+        if (!services) {
+          if (retryTimer === null) failDiscovery(lastError ?? "未找到 Codex 原生项目服务");
+          return;
+        }
         stopRetry();
         installed = services;
         if (defaultDirectory) {
@@ -471,7 +479,10 @@ export function installProjectPickerPage(api: PluginApi, options: InstallProject
           services.projects = wrappedProjects;
         }
         syncProjects();
-      } catch { /* retry on next signal */ } finally { installing = false; }
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : String(err);
+        if (retryTimer === null) failDiscovery(lastError);
+      } finally { installing = false; }
     })();
   };
 
@@ -485,16 +496,16 @@ export function installProjectPickerPage(api: PluginApi, options: InstallProject
   ownerWindow.addEventListener("message", onMessage);
   ownerWindow.addEventListener("codexhost:draft-prewarm-policy-changed", tryInstall);
   ownerWindow.addEventListener("codexhost:renderer-adapter-status", tryInstall);
-  applyDefaultDir();
-  tryInstall();
 
   const retryMs = options.retryIntervalMs ?? 1_000;
   if (retryMs > 0) {
     retryTimer = setInterval(() => {
-      if (disposed || installed !== null || ++retryTicks > 15) return stopRetry();
+      if (disposed || installed !== null) return stopRetry();
+      if (++retryTicks > 15) return failDiscovery(lastError ?? "未找到 Codex 原生项目服务");
       tryInstall();
     }, retryMs);
   }
+  tryInstall();
 
   return () => {
     if (disposed) return;

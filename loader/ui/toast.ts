@@ -26,16 +26,16 @@ export function createFailureToast(doc: Document, onView: () => void): FailureTo
     currentId = null;
   };
   const attach = () => {
-    if (!toast.isConnected && doc.body && typeof doc.body.append === "function") doc.body.append(toast);
+    if (!toast.isConnected && doc.body) doc.body.append(toast);
   };
 
   viewBtn.addEventListener("click", (e) => {
-    e?.stopPropagation?.();
+    e.stopPropagation();
     hide();
     onView();
   });
   closeBtn.addEventListener("click", (e) => {
-    e?.stopPropagation?.();
+    e.stopPropagation();
     hide();
   });
   attach();

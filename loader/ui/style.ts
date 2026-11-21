@@ -51,7 +51,7 @@ export const UI_CSS = [
 export function injectStyles(doc: Document): void {
   if (doc.getElementById(STYLE_ID)) return;
   const host = doc.head ?? doc.documentElement ?? doc.body;
-  if (!host || typeof host.append !== "function") return;
+  if (!host) return;
   const style = doc.createElement("style");
   style.id = STYLE_ID;
   style.textContent = UI_CSS;

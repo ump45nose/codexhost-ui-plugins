@@ -424,8 +424,9 @@ describe("default directory & applyDefaultDirectory lifecycle (C2.8)", () => {
 
     await flush();
 
-    // 1. Activation triggered applyDefaultDirectory and discovered & wrapped native services.
-    expect(requests.map((r) => r.method)).toEqual(["applyDefaultDirectory"]);
+    // 1. Activation discovered & wrapped native services and reconciled duplicates
+    //    without redundant applyDefaultDirectory (task.ts already writes it at startup).
+    expect(requests).toEqual([]);
     expect(fake.services.workspaceFiles).not.toBe(fake.originalWorkspaceFiles);
     expect(fake.services.projects).not.toBe(fake.originalProjects);
     expect(fake.removedIds).toEqual(["p-dup"]);
@@ -440,13 +441,12 @@ describe("default directory & applyDefaultDirectory lifecycle (C2.8)", () => {
       "applyDefaultDirectory",
       "applyDefaultDirectory",
       "applyDefaultDirectory",
-      "applyDefaultDirectory",
     ]);
 
     // 3. Local empty-path browseDirectory also triggers applyDefaultDirectory and redirects.
     const listed = await fake.services.workspaceFiles.browseDirectory({ directoryPath: null });
     expect(listed.directoryPath).toBe("/Users/tester/Developer/Repos/Personal");
-    expect(requests).toHaveLength(5);
+    expect(requests).toHaveLength(4);
 
     // 4. Disposing restores original native services and removes all listeners.
     expect(win.activeListenerCount).toBe(3);
@@ -457,10 +457,11 @@ describe("default directory & applyDefaultDirectory lifecycle (C2.8)", () => {
 
     // Subsequent messages after dispose do nothing.
     win.emitMessage({ type: "workspace-root-option-picked" });
-    expect(requests).toHaveLength(5);
+    expect(requests).toHaveLength(4);
 
     // Re-activating with updated settings works cleanly (idempotent dispose + fresh activation).
     dispose();
+    win.postedMessages = [];
     const { api: api2, requests: requests2 } = createFakeApi({ defaultDirectory: "" });
     const dispose2 = installProjectPickerPage(api2, {
       ownerWindow: win as unknown as Window,
@@ -470,13 +471,48 @@ describe("default directory & applyDefaultDirectory lifecycle (C2.8)", () => {
     await flush();
 
     // Empty defaultDirectory skips applyDefaultDirectory and leaves workspaceFiles unwrapped,
-    // while still wrapping projects for deduplication.
+    // while still wrapping projects for deduplication; no duplicates -> no global-state-updated.
     expect(requests2).toEqual([]);
+    expect(win.postedMessages).toEqual([]);
     expect(fake.services.workspaceFiles).toBe(fake.originalWorkspaceFiles);
     expect(fake.services.projects).not.toBe(fake.originalProjects);
 
     dispose2();
     expect(fake.services.projects).toBe(fake.originalProjects);
     expect(win.activeListenerCount).toBe(0);
+  });
+
+  it("calls api.fail when service discovery throws or exhausts 15 retries", async () => {
+    // 1. Catalog error with retryIntervalMs: 0 -> fails immediately with error message.
+    const win1 = new FakeWindow();
+    win1.__codexhostLoadedModulesV1 = { complete: false };
+    const { api: api1, failures: failures1 } = createFakeApi({});
+    const dispose1 = installProjectPickerPage(api1, {
+      ownerWindow: win1 as unknown as Window,
+      retryIntervalMs: 0,
+    });
+    await flush();
+    expect(failures1).toHaveLength(1);
+    expect(failures1[0]).toContain("catalog is unavailable");
+    dispose1();
+
+    // 2. Missing services after 15 retries -> calls api.fail once.
+    vi.useFakeTimers();
+    try {
+      const win2 = new FakeWindow();
+      const { api: api2, failures: failures2 } = createFakeApi({});
+      const dispose2 = installProjectPickerPage(api2, {
+        ownerWindow: win2 as unknown as Window,
+        retryIntervalMs: 10,
+      });
+      for (let i = 0; i < 16; i++) {
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      expect(failures2).toHaveLength(1);
+      expect(failures2[0]).toContain("未找到 Codex 原生项目服务");
+      dispose2();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

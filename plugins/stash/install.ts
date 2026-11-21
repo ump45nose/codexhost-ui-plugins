@@ -13,7 +13,7 @@ import { openDuePopover } from "./popover.ts";
 import { browserNotificationPort, createReminderController } from "./reminders.ts";
 import { registerReservedHotkeys, STASH_RESERVED_HOTKEYS } from "./reserved-hotkeys.ts";
 import { createStashSection } from "./section.ts";
-import { createPersistedStore, type StashStorageBackend } from "./storage.ts";
+import { createPersistedStore, defaultStorage, type StashStorageBackend } from "./storage.ts";
 import { StashStore } from "./store.ts";
 import { pickStrings } from "./strings.ts";
 import { ensureStyles } from "./style.ts";
@@ -81,7 +81,7 @@ export function installSidebarStash(
   const strings = pickStrings(locale);
   const adapter = options.adapter ?? createSidebarAdapter(ownerDocument);
   const storage: StashStorageBackend | null =
-    options.storage === undefined ? safeLocalStorage() : options.storage;
+    options.storage === undefined ? defaultStorage() : options.storage;
   const { store, migratedFromLegacy } = createPersistedStore(StashStore, { storage });
   if (migratedFromLegacy) {
     log.info?.("[cxp:stash] migrated state from localStorage codex-stash:v1");
@@ -126,13 +126,7 @@ export function installSidebarStash(
   );
 
   function mountSection(): void {
-    const placement =
-      typeof adapter.findMountPlacement === "function"
-        ? adapter.findMountPlacement()
-        : (() => {
-            const parent = adapter.findMountPoint();
-            return parent ? { parent, after: null, before: null, gap: null } : null;
-          })();
+    const placement = adapter.findMountPlacement();
     if (!placement?.parent) return;
     const { parent, after = null, before = null, gap = null } = placement;
     // Pin after the Recents (or last) native section on every refresh so React
@@ -164,7 +158,7 @@ export function installSidebarStash(
     reminder.sync(store.getState());
   }
 
-  async function restoreThread(threadId: string, opts: { open?: boolean } = {}): Promise<void> {
+  async function restoreThread(threadId: string, opts: { open?: boolean } = {}): Promise<boolean> {
     const item = store.get(threadId);
     if (opts.open !== false) {
       const opened = adapter.openThread(threadId);
@@ -172,7 +166,16 @@ export function installSidebarStash(
         log.warn?.("[cxp:stash] thread row not found for", threadId);
       }
     }
-    store.remove(threadId);
+    let removed: boolean;
+    try {
+      removed = store.remove(threadId);
+    } catch (error) {
+      if (error instanceof ThreadIdError) {
+        log.warn?.("[cxp:stash]", error.message);
+        return false;
+      }
+      throw error;
+    }
     if (item?.pin) {
       // Give the sidebar a tick to render the thread before re-pinning.
       await new Promise<void>((resolve) => {
@@ -182,10 +185,10 @@ export function installSidebarStash(
         }, 0);
         pendingTimers.add(timer);
       });
-      if (disposed) return;
+      if (disposed) return removed;
       adapter.restorePin(threadId, item.pin);
     }
-    refresh();
+    return removed;
   }
 
   function activeTarget(): StashThreadTarget | null {
@@ -214,7 +217,6 @@ export function installSidebarStash(
       }
       throw error;
     }
-    refresh();
     return true;
   }
 
@@ -249,25 +251,28 @@ export function installSidebarStash(
     if (target) openDueFor(target, anchor);
   }
 
-  function openDueFor(target: StashThreadTarget, anchor?: HTMLElement): void {
-    const { threadId } = target;
-    if (!store.has(threadId) && !stashThread(target, null)) return;
+  function showDuePopover(threadId: string, anchor: HTMLElement | { getBoundingClientRect(): DOMRect }): void {
     const item = store.get(threadId);
     popoverClose?.();
     const handle = openDuePopover({
       document: ownerDocument,
       strings,
       currentDueAt: item?.dueAt ?? null,
-      anchor: anchor ?? fakeAnchor(),
+      anchor,
       onSelect: (dueAt) => {
         store.put({ threadId, dueAt });
-        refresh();
       },
       onClose: () => {
         popoverClose = null;
       },
     });
     popoverClose = () => handle.close();
+  }
+
+  function openDueFor(target: StashThreadTarget, anchor?: HTMLElement): void {
+    const { threadId } = target;
+    if (!store.has(threadId) && !stashThread(target, null)) return;
+    showDuePopover(threadId, anchor ?? fakeAnchor());
   }
 
   function openRowMenu(threadId: string, event: MouseEvent, anchor: HTMLElement): void {
@@ -287,22 +292,7 @@ export function installSidebarStash(
     setDue.textContent = strings.menuSetDue;
     setDue.addEventListener("click", () => {
       closeMenu();
-      const item = store.get(threadId);
-      popoverClose?.();
-      const handle = openDuePopover({
-        document: ownerDocument,
-        strings,
-        currentDueAt: item?.dueAt ?? null,
-        anchor,
-        onSelect: (dueAt) => {
-          store.put({ threadId, dueAt });
-          refresh();
-        },
-        onClose: () => {
-          popoverClose = null;
-        },
-      });
-      popoverClose = () => handle.close();
+      showDuePopover(threadId, anchor);
     });
     menu.append(unstash, setDue);
     ownerDocument.body.appendChild(menu);
@@ -385,7 +375,6 @@ export function installSidebarStash(
     const title = adapter.readTitle(button);
     const pin = adapter.readPinState(threadId) ?? undefined;
     store.put({ threadId, title, pin });
-    refresh();
   }
 
   let disposed = false;
@@ -409,7 +398,7 @@ export function installSidebarStash(
       if (!disposed) stashThread(target);
     },
     unstash: (threadId) => {
-      if (!disposed && store.remove(threadId)) refresh();
+      if (!disposed) void restoreThread(threadId, { open: false });
     },
     setRestoreDate: (target, anchor) => {
       if (!disposed) openDueFor(target, anchor);
@@ -461,30 +450,7 @@ function detectLocale(doc: Document): string {
   );
 }
 
-function safeLocalStorage(): StashStorageBackend | null {
-  try {
-    if (typeof localStorage === "undefined") return null;
-    return localStorage;
-  } catch {
-    return null;
-  }
-}
-
 function fakeAnchor(): { getBoundingClientRect(): DOMRect } {
-  return {
-    getBoundingClientRect: () =>
-      ({
-        x: 24,
-        y: 80,
-        top: 80,
-        left: 24,
-        bottom: 80,
-        right: 24,
-        width: 0,
-        height: 0,
-        toJSON() {
-          return this;
-        },
-      }) as DOMRect,
-  };
+  const rect = { x: 24, y: 80, top: 80, left: 24, bottom: 80, right: 24, width: 0, height: 0, toJSON() { return this; } } as DOMRect;
+  return { getBoundingClientRect: () => rect };
 }

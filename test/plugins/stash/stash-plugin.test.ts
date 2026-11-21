@@ -550,6 +550,46 @@ describe("window.__cxpStashV1 contract", () => {
 
     handle.dispose();
   });
+
+  it("restores pin state on unstash and ignores invalid threadIds without throwing", async () => {
+    const storage = createMemoryStorage();
+    const { doc, win, pinnedSection } = buildDesktopFixture("thread-active-01");
+
+    const pinnedBtn = doc.createElement("button");
+    pinnedBtn.setAttribute("data-app-action-sidebar-thread-id", "pinned-thread-01");
+    const pinControl = doc.createElement("button");
+    pinControl.setAttribute("data-app-action-sidebar-thread-pin", "1");
+    const pinClicked = vi.fn();
+    pinControl.addEventListener("click", pinClicked);
+    pinnedBtn.appendChild(pinControl);
+    pinnedSection.appendChild(pinnedBtn);
+
+    const handle = installSidebarStash({
+      document: doc as unknown as Document,
+      window: win as unknown as Window & typeof globalThis,
+      storage,
+      getLocale: () => "zh-CN",
+    })!;
+    const api = win[STASH_GLOBAL_KEY] as CxpStashV1;
+
+    api.stash({ threadId: "pinned-thread-01", title: "Pinned Thread" });
+    expect(handle.store.get("pinned-thread-01")?.pin).toEqual({
+      wasPinned: true,
+      index: 0,
+      beforeThreadId: null,
+    });
+
+    // Invalid threadId must not throw an uncaught ThreadIdError.
+    expect(() => api.unstash("bad title with spaces")).not.toThrow();
+    expect(() => api.unstash("client-new-thread-1")).not.toThrow();
+
+    api.unstash("pinned-thread-01");
+    expect(api.isStashed("pinned-thread-01")).toBe(false);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(pinClicked).toHaveBeenCalledTimes(1);
+
+    handle.dispose();
+  });
 });
 
 describe("auto-unstash on user message without internal events (C2.5)", () => {

@@ -5,7 +5,7 @@ import type { LoaderState, LoaderV1, LoaderWindow } from "../core.ts";
 import type { PluginStatus, SettingField } from "../../plugins/types.ts";
 import { createPluginPanel } from "./panel.ts";
 import { createRailEntry } from "./rail-entry.ts";
-import { injectStyles } from "./style.ts";
+import { injectStyles, STYLE_ID } from "./style.ts";
 import { createFailureToast } from "./toast.ts";
 
 export interface ResolvedPlugin {
@@ -30,7 +30,7 @@ export function el(
   if (opts.type) node.type = opts.type;
   if (opts.text !== undefined) node.textContent = opts.text;
   for (const [k, v] of Object.entries(opts.attrs ?? {})) node.setAttribute(k, v);
-  if (children.length > 0) node.append?.(...children);
+  if (children.length > 0) node.append(...children);
   return node;
 }
 
@@ -44,7 +44,7 @@ export function resolvePlugins(state: LoaderState): ResolvedPlugin[] {
       : p.status === "failed" || local?.status === "failed"
         ? "failed"
         : (local?.status ?? p.status);
-    const reason = status === "off" ? undefined : p.status === "failed" ? p.reason : (local?.reason ?? p.reason);
+    const reason = status === "off" ? undefined : p.status === "failed" ? (p.reason ?? local?.reason) : (local?.reason ?? p.reason);
     return { id: p.id, name: p.name, enabled: p.enabled, status, reason, settings: p.settings ?? {}, settingFields: p.settingFields ?? [] };
   });
   for (const [id, local] of Object.entries(state.local)) {
@@ -68,7 +68,7 @@ export function formatCheckedAt(checkedAt: unknown, now = Date.now()): string {
 
 export function mountLoaderUi(win: LoaderWindow, loader: LoaderV1): () => void {
   const doc = win.document;
-  if (loader.window !== "main" || !doc || typeof doc.createElement !== "function") return () => {};
+  if (loader.window !== "main" || !doc) return () => {};
 
   let unmounted = false;
   let stop: (() => void) | null = null;
@@ -79,7 +79,7 @@ export function mountLoaderUi(win: LoaderWindow, loader: LoaderV1): () => void {
     const rail = createRailEntry(doc, () => panel.toggle());
     const panel = createPluginPanel(doc, loader, {
       onOpenChange: (open) => rail.setActive(open),
-      isInsideTrigger: (t) => Boolean(t && typeof rail.element.contains === "function" && rail.element.contains(t as Node)),
+      isInsideTrigger: (t) => Boolean(t && rail.element.contains(t as Node)),
     });
     const toast = createFailureToast(doc, () => panel.open());
     const sync = (state: LoaderState) => {
@@ -95,15 +95,16 @@ export function mountLoaderUi(win: LoaderWindow, loader: LoaderV1): () => void {
       rail.destroy();
       panel.destroy();
       toast.destroy();
+      doc.getElementById(STYLE_ID)?.remove();
     };
   };
 
   if (doc.body) mount();
-  else doc.addEventListener?.("DOMContentLoaded", mount);
+  else doc.addEventListener("DOMContentLoaded", mount);
 
   return () => {
     unmounted = true;
-    doc.removeEventListener?.("DOMContentLoaded", mount);
+    doc.removeEventListener("DOMContentLoaded", mount);
     stop?.();
   };
 }

@@ -79,7 +79,7 @@ export function createPersistedStore<
   return { store, migratedFromLegacy: loaded.migratedFromLegacy };
 }
 
-function defaultStorage(): StashStorageBackend | null {
+export function defaultStorage(): StashStorageBackend | null {
   try {
     if (typeof localStorage === "undefined") return null;
     return localStorage;

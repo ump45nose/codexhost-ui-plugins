@@ -39,6 +39,8 @@ export class FakeElement {
   value = "";
   innerHTML = "";
   hidden = false;
+  selectionStart: number | null = null;
+  selectionEnd: number | null = null;
   style = { cssText: "" };
   children: FakeElement[] = [];
   parentNode: FakeElement | null = null;
@@ -164,6 +166,15 @@ export class FakeElement {
 
   click(): void {
     this.dispatchEvent({ type: "click" });
+  }
+
+  focus(): void {
+    this.doc.activeElement = this;
+  }
+
+  setSelectionRange(start: number, end: number): void {
+    this.selectionStart = start;
+    this.selectionEnd = end;
   }
 
   setRect(rect: Partial<typeof this._rect>): void {

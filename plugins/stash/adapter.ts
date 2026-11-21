@@ -51,8 +51,6 @@ export interface MountPlacement {
 
 export interface SidebarAdapter {
   findMountPlacement(): MountPlacement | null;
-  /** @deprecated Prefer findMountPlacement(); kept for older call sites/tests. */
-  findMountPoint(): HTMLElement | null;
   listThreadButtons(): HTMLElement[];
   findThreadButton(threadId: string): HTMLElement | null;
   readThreadId(node: Element | null): string | null;
@@ -219,10 +217,6 @@ export function createSidebarAdapter(doc: Document = document): SidebarAdapter {
     return null;
   }
 
-  function findMountPoint(): HTMLElement | null {
-    return findMountPlacement()?.parent ?? null;
-  }
-
   function readActiveThreadId(): string | null {
     const current = doc.querySelector(SELECTORS.threadCurrent);
     return readThreadId(current);
@@ -340,7 +334,6 @@ export function createSidebarAdapter(doc: Document = document): SidebarAdapter {
 
   return {
     findMountPlacement,
-    findMountPoint,
     listThreadButtons,
     findThreadButton,
     readThreadId,

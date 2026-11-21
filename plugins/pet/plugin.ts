@@ -102,7 +102,7 @@ const manifest: PluginManifest = {
     {
       key: "stackMaxHeight",
       type: "number",
-      label: "Pet 会话栈最大高度 (px)",
+      label: "Pet 会话栈高度上限 (px)",
       default: 600,
       min: 200,
       max: 1600,

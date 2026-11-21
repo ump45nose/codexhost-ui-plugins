@@ -5,11 +5,9 @@ const manifest: PluginManifest = {
   name: "竖屏",
   windows: ["main"],
   page: "./page.ts",
-  // Fork's renderer-sidebar-overlay and renderer-top-tabs run inside installRendererBindingProbe
-  // without setting any dedicated window global (unlike stash's __codexhostSidebarStashV1 or pet's
-  // __codexhostAvatarOverlayV1). Do not guard on __codexhostRendererBindingProbeV1, which upstream
-  // also defines.
-  forkGuards: [],
+  // Fork's renderer-top-tabs mounts DOM markers with codexhost-specific names without setting a
+  // dedicated window global. Guard on those DOM markers (the plugin itself uses cxp-* markers).
+  forkGuards: ["dom:[data-codexhost-top-tabs]", "dom:#codexhost-top-tabs-styles"],
   settings: [
     {
       key: "sidebarAutoCollapse",

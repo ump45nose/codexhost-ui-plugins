@@ -1,9 +1,10 @@
 import type { PluginApi } from "../types.ts";
-import { hostRequest, hostRouting } from "../../shared/host.ts";
 import {
-  collectSidebarRemoteProjects,
-  resolveShortHostLabel,
-} from "../../shared/remote-projects.ts";
+  compatibleRendererPluginPresentation,
+  parsePluginDescriptors,
+  type HarnessPluginDescriptor,
+} from "../../shared/agent-icon.ts";
+import { hostRequest, hostRouting } from "../../shared/host.ts";
 import {
   DEFAULT_SIDEBAR_AUTO_COLLAPSE,
   DEFAULT_SIDEBAR_OVERLAY_BREAKPOINT,
@@ -16,10 +17,6 @@ import {
   createWindowCxpStashBridge,
   installRendererTopTabs,
 } from "./top-tabs/index.ts";
-import {
-  compatibleRendererPluginPresentation,
-  type HarnessPluginDescriptor,
-} from "./vendor/agent-icon.ts";
 
 const THREAD_OWNERSHIP_LIST_METHOD = "codexhost/thread/ownership/list";
 const HARNESS_PLUGIN_LIST_METHOD = "codexhost/harness/plugins/list";
@@ -43,24 +40,6 @@ function detectLocale(doc: Document): string {
   return (
     doc.documentElement?.lang || (typeof navigator !== "undefined" ? navigator.language : "en")
   );
-}
-
-function parsePluginDescriptors(value: unknown): Map<string, HarnessPluginDescriptor> {
-  const map = new Map<string, HarnessPluginDescriptor>();
-  if (!isRecord(value) || !Array.isArray(value.plugins)) return map;
-  for (const item of value.plugins) {
-    if (!isRecord(item) || typeof item.id !== "string" || !item.id.trim()) continue;
-    const descriptor: HarnessPluginDescriptor = {
-      id: item.id,
-      ...(typeof item.name === "string" ? { name: item.name } : {}),
-      ...(typeof item.icon === "string" ? { icon: item.icon } : {}),
-      ...(isRecord(item.iconStyle)
-        ? { iconStyle: item.iconStyle as HarnessPluginDescriptor["iconStyle"] }
-        : {}),
-    };
-    map.set(descriptor.id, descriptor);
-  }
-  return map;
 }
 
 export default function activate(api: PluginApi, env: ActivateEnv = {}): () => void {
@@ -96,7 +75,7 @@ export default function activate(api: PluginApi, env: ActivateEnv = {}): () => v
     void hostRequest(hostId, HARNESS_PLUGIN_LIST_METHOD, {})
       .then((result) => {
         if (disposed) return;
-        const parsed = parsePluginDescriptors(result);
+        const parsed = new Map(parsePluginDescriptors(result).map((d) => [d.id, d]));
         pluginsByHost.set(hostId, parsed);
         if (parsed.size > 0) topTabs.refresh();
       })
@@ -190,12 +169,6 @@ export default function activate(api: PluginApi, env: ActivateEnv = {}): () => v
     return { agent, ...(plugin ? { plugin } : {}) };
   };
 
-  const resolveHostLabel = (hostId: string): string | null => {
-    if (!hostId || hostId === "local") return null;
-    const project = collectSidebarRemoteProjects(doc).find((item) => item.hostId === hostId);
-    return resolveShortHostLabel(hostId, project?.hostDisplayName ?? null);
-  };
-
   const sidebarOverlay = installRendererSidebarOverlay({
     document: doc,
     window: win,
@@ -209,7 +182,6 @@ export default function activate(api: PluginApi, env: ActivateEnv = {}): () => v
     window: win,
     getLocale: () => detectLocale(doc),
     getThreadAgent: resolveThreadAgent,
-    getHostLabel: resolveHostLabel,
     acknowledgedFailedKeys,
     stash: createWindowCxpStashBridge(win),
     enabled: topTabsEnabled,

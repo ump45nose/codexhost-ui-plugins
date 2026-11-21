@@ -13,24 +13,44 @@ interface DesktopRemoteProjectRecord {
   readonly path: string;
 }
 
+const projectsCache = new Map<
+  string,
+  { readonly mtimeMs: number; readonly size: number; readonly projects: DesktopRemoteProjectRecord[] }
+>();
+
 /** Reads Desktop's persisted `remote-projects` from `.codex-global-state.json` (read-only). */
 export async function readDesktopRemoteProjects(
   file = join(process.env.CODEX_HOME ?? join(homedir(), ".codex"), ".codex-global-state.json"),
+  log?: (...args: unknown[]) => void,
 ): Promise<DesktopRemoteProjectRecord[]> {
-  const handle = await open(file, "r").catch(() => undefined);
-  if (!handle) return [];
+  let handle;
+  try {
+    handle = await open(file, "r");
+  } catch (err) {
+    projectsCache.delete(file);
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      log?.("readDesktopRemoteProjects open failed:", err);
+    }
+    return [];
+  }
   try {
     const stat = await handle.stat();
     if (!stat.isFile() || stat.size > 32 * 1024 * 1024) return [];
+    const cached = projectsCache.get(file);
+    if (cached && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size) {
+      return cached.projects;
+    }
     const text = await handle.readFile("utf8");
-    if (Buffer.byteLength(text) > 32 * 1024 * 1024) return [];
     const state = JSON.parse(text) as Record<string, unknown>;
     const projects = state["remote-projects"];
-    if (!Array.isArray(projects)) return [];
+    if (!Array.isArray(projects)) {
+      projectsCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, projects: [] });
+      return [];
+    }
     const order = Array.isArray(state["project-order"])
       ? (state["project-order"] as unknown[])
       : [];
-    return projects
+    const result = projects
       .flatMap((p: unknown): DesktopRemoteProjectRecord[] => {
         if (!p || typeof p !== "object") return [];
         const v = p as Record<string, unknown>;
@@ -50,7 +70,12 @@ export async function readDesktopRemoteProjects(
         const bi = order.indexOf(b.id);
         return (ai === -1 ? Number.MAX_SAFE_INTEGER : ai) - (bi === -1 ? Number.MAX_SAFE_INTEGER : bi);
       });
-  } catch {
+    projectsCache.set(file, { mtimeMs: stat.mtimeMs, size: stat.size, projects: result });
+    return result;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      log?.("readDesktopRemoteProjects failed:", err);
+    }
     return [];
   } finally {
     await handle.close();
@@ -58,7 +83,7 @@ export async function readDesktopRemoteProjects(
 }
 
 function petTask(ctx: TaskContext): () => void {
-  ctx.onRequest("remoteProjects/list", () => readDesktopRemoteProjects());
+  ctx.onRequest("remoteProjects/list", () => readDesktopRemoteProjects(undefined, ctx.log));
   return () => {};
 }
 

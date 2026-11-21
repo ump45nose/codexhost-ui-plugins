@@ -1,9 +1,9 @@
-export const TOP_TABS_STYLE_ID = "codexhost-top-tabs-styles";
+export const TOP_TABS_STYLE_ID = "cxp-top-tabs-styles";
 
 /** Uses Codex Desktop's own tokens and inherited fonts so the strip reads as part of the native page. */
 export function buildTopTabsCss(): string {
   return `
-[data-codexhost-top-tabs] {
+[data-cxp-top-tabs] {
   position: relative;
   flex-shrink: 0;
   display: grid;
@@ -15,7 +15,7 @@ export function buildTopTabsCss(): string {
   color: var(--color-token-text-secondary);
   -webkit-app-region: no-drag;
 }
-[data-codexhost-top-tabs][hidden] { display: none; }
+[data-cxp-top-tabs][hidden] { display: none; }
 .codexhost-session-tab {
   display: inline-flex;
   align-items: center;
@@ -72,7 +72,7 @@ export function buildTopTabsCss(): string {
 .codexhost-session-tab:is(:hover, :focus-within) .codexhost-session-tab-stash { display: inline-flex; }
 .codexhost-session-tab:is(:hover, :focus-within):has(> .codexhost-session-tab-stash) > .codexhost-session-tab-status { display: none; }
 .codexhost-session-tab-stash:hover { background: var(--color-token-interactive-bg-secondary-selected); color: var(--color-token-foreground); }
-[data-codexhost-top-tab-context-menu] {
+[data-cxp-top-tab-context-menu] {
   position: fixed;
   z-index: 1000;
   display: flex;
@@ -86,7 +86,7 @@ export function buildTopTabsCss(): string {
   box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.16));
   font-size: var(--text-xs, 13px);
 }
-[data-codexhost-top-tab-context-menu] button {
+[data-cxp-top-tab-context-menu] button {
   height: 28px;
   padding: 0 8px;
   border: 0;
@@ -97,7 +97,7 @@ export function buildTopTabsCss(): string {
   text-align: start;
   cursor: pointer;
 }
-[data-codexhost-top-tab-context-menu] button:hover {
+[data-cxp-top-tab-context-menu] button:hover {
   background: var(--color-token-menu-selection-background, var(--color-token-list-hover-background));
   color: var(--color-token-menu-selection-foreground, var(--color-token-foreground));
 }

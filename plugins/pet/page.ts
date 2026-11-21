@@ -18,7 +18,7 @@ import {
 import {
   compatibleRendererPluginPresentation,
   type HarnessPluginDescriptor,
-} from "./vendor/agent-icon.ts";
+} from "../../shared/agent-icon.ts";
 
 const REMOTE_SYNC_INTERVAL_MS = 30_000;
 
@@ -75,7 +75,7 @@ export default function activate(api: PluginApi, env: PetActivateEnv = {}): () =
   const enableCardAgents = readBoolSetting(api.settings, "cardAgents", true);
 
   let disposed = false;
-  let liveProjects: readonly PetsRemoteProject[] = [];
+  let liveProjects: readonly PetsRemoteProject[] | null = null;
   let liveCatalog: PetsHarnessCatalog | null = null;
   let syncInflight = false;
 
@@ -134,17 +134,18 @@ export default function activate(api: PluginApi, env: PetActivateEnv = {}): () =
           }
         }
       }
-      if (mergedPlugins.size > 0) {
-        liveCatalog = {
-          enabledAgents: ["codex", ...mergedPlugins.keys()],
-          plugins: [...mergedPlugins.values()].map((p) => ({
-            id: p.id,
-            name: p.name ?? p.id,
-            ...(p.icon ? { icon: p.icon } : {}),
-            ...(p.iconStyle ? { iconStyle: p.iconStyle } : {}),
-          })),
-        };
-      }
+      liveCatalog =
+        mergedPlugins.size > 0
+          ? {
+              enabledAgents: ["codex", ...mergedPlugins.keys()],
+              plugins: [...mergedPlugins.values()].map((p) => ({
+                id: p.id,
+                name: p.name ?? p.id,
+                ...(p.icon ? { icon: p.icon } : {}),
+                ...(p.iconStyle ? { iconStyle: p.iconStyle } : {}),
+              })),
+            }
+          : { enabledAgents: ["codex"], plugins: [] };
       overlay.refresh();
     } catch {
       // Host routing or daemon request may not be ready yet; keep fallback and retry on next tick.

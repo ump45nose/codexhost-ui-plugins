@@ -2,8 +2,12 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // Ported from codex-host packages/renderer-extension/src/renderer-avatar-overlay.ts.
 
+import {
+  createRendererAgentIcon,
+  rendererAgentLabel,
+  type HarnessPluginDescriptor,
+} from "../../../shared/agent-icon.ts";
 import { createRemoteHostGlobe, findReactProps } from "../../../shared/remote-projects.ts";
-import { writePetsCardThreads } from "../card-agents/index.ts";
 import {
   PETS_QUICK_CHAT_TARGET_STORAGE_KEY,
   PETS_REMOTE_PROJECTS_STORAGE_KEY,
@@ -15,11 +19,6 @@ import {
 } from "../quick-chat-target/index.ts";
 import { installPetsRemoteSessions } from "../remote-sessions/index.ts";
 import { CXP_PETS_STACK_MAX_HEIGHT_HOOK } from "../rewrites.ts";
-import {
-  createRendererAgentIcon,
-  rendererAgentLabel,
-  type HarnessPluginDescriptor,
-} from "../vendor/agent-icon.ts";
 import { encodeHarnessPluginRoute, isValidHarnessId } from "../vendor/harness-route.ts";
 
 export type RendererAgent = string;
@@ -38,7 +37,6 @@ export const PETS_HARNESS_CATALOG_STORAGE_KEY = "codexhost.pets-harness-catalog.
 export const PETS_THREAD_AGENTS_STORAGE_KEY = "codexhost.pets-thread-agents.v1";
 /** The Pet's own Quick Chat Agent; the main window keeps its new-thread default in Host. */
 export const PETS_QUICK_CHAT_AGENT_STORAGE_KEY = "codexhost.pets-quick-chat-agent.v1";
-export const PETS_STACK_MAX_HEIGHT_STORAGE_KEY = "codexhost.pets-stack-max-height.v1";
 export const DEFAULT_PETS_STACK_MAX_HEIGHT_PX = 600;
 export const PETS_STACK_MAX_HEIGHT_MIN_PX = 200;
 export const PETS_STACK_MAX_HEIGHT_MAX_PX = 1600;
@@ -62,8 +60,8 @@ export interface InstallRendererAvatarOverlayOptions {
   readonly enableRemoteSessions?: boolean;
   readonly enableQuickChatTarget?: boolean;
   readonly enableCardAgents?: boolean;
-  /** Optional live remote projects (from Host RPC); falls back to localStorage when omitted/empty. */
-  readonly getRemoteProjects?: () => readonly PetsRemoteProject[];
+  /** Optional live remote projects (from Host RPC); falls back to localStorage only when null/omitted. */
+  readonly getRemoteProjects?: () => readonly PetsRemoteProject[] | null;
   /** Optional live Harness catalog (from Host RPC); merged with localStorage fallback. */
   readonly getHarnessCatalog?: () => PetsHarnessCatalog | null;
   /** Optional live card-thread agent resolver (e.g. via `codexhost/thread/ownership/list`). */
@@ -94,46 +92,6 @@ function sanitizePlugin(raw: unknown): PetsHarnessCatalogPlugin | undefined {
   };
 }
 
-export function isAvatarOverlayRendererUrl(value: string): boolean {
-  try {
-    const url = new URL(value, "app://-/");
-    if (url.pathname === "/avatar-overlay" || url.pathname.endsWith("/avatar-overlay.html"))
-      return true;
-    const rawRoute = url.searchParams.get("initialRoute") ?? "";
-    let decoded = rawRoute;
-    try {
-      decoded = decodeURIComponent(rawRoute);
-    } catch {
-      // Keep rawRoute if malformed.
-    }
-    const surface = url.searchParams.get("desktopSurface");
-    return (
-      [rawRoute, decoded].some(
-        (r) =>
-          r === "/avatar-overlay" ||
-          r.startsWith("/avatar-overlay?") ||
-          r.startsWith("/avatar-overlay/"),
-      ) ||
-      surface === "avatarOverlay" ||
-      surface === "avatar-overlay"
-    );
-  } catch {
-    return false;
-  }
-}
-
-export function isAvatarOverlayLocation(
-  loc: Partial<Pick<Location, "href" | "pathname" | "search">> | null | undefined,
-): boolean {
-  if (!loc) return false;
-  if (loc.href && isAvatarOverlayRendererUrl(loc.href)) return true;
-  const pathname = loc.pathname ?? "";
-  const search = loc.search ?? "";
-  return isAvatarOverlayRendererUrl(
-    `app://-${pathname.startsWith("/") ? pathname : `/${pathname}`}${!search || search.startsWith("?") ? search : `?${search}`}`,
-  );
-}
-
 export function readPetsThreadAgents(
   storage?: Pick<Storage, "getItem"> | null,
 ): ReadonlyMap<string, RendererAgent> {
@@ -149,19 +107,6 @@ export function readPetsThreadAgents(
   return agents;
 }
 
-export function writePetsThreadAgents(
-  agents: Readonly<Record<string, string>>,
-  storage?: Pick<Storage, "getItem" | "setItem"> | null,
-): void {
-  try {
-    const next = JSON.stringify(agents);
-    if (storage?.getItem(PETS_THREAD_AGENTS_STORAGE_KEY) !== next)
-      storage?.setItem(PETS_THREAD_AGENTS_STORAGE_KEY, next);
-  } catch {
-    // Ignore storage errors.
-  }
-}
-
 export function clampPetsStackMaxHeight(value: unknown): number {
   const numeric = typeof value === "number" ? value : Number(value);
   if (Number.isFinite(numeric) && numeric > 0) {
@@ -171,27 +116,6 @@ export function clampPetsStackMaxHeight(value: unknown): number {
     );
   }
   return DEFAULT_PETS_STACK_MAX_HEIGHT_PX;
-}
-
-export function readPetsStackMaxHeightPreference(
-  storage?: Pick<Storage, "getItem"> | null,
-): number {
-  try {
-    return clampPetsStackMaxHeight(storage?.getItem(PETS_STACK_MAX_HEIGHT_STORAGE_KEY) ?? "");
-  } catch {
-    return DEFAULT_PETS_STACK_MAX_HEIGHT_PX;
-  }
-}
-
-export function writePetsStackMaxHeightPreference(
-  value: number,
-  storage?: Pick<Storage, "setItem"> | null,
-): void {
-  try {
-    storage?.setItem(PETS_STACK_MAX_HEIGHT_STORAGE_KEY, String(Math.round(value)));
-  } catch {
-    // Ignore storage errors.
-  }
 }
 
 /**
@@ -215,50 +139,42 @@ export function resolvePetsStackMaxHeight(
 
 const LAYOUT_CHANGED_MESSAGE = "avatar-overlay-layout-changed";
 const STACK_HOOK_HANDLE_SYMBOL = Symbol.for("cxp.petsStackHeightHook");
+const LAST_LAYOUT_SYMBOL = Symbol.for("cxp.petsLastLayout");
 
 /**
  * Serves the stack height to the rewritten Codex Pet chunk (see `plugins/pet/rewrites.ts`).
- * Codex derives the height only when a layout arrives, so a preference change replays the
- * latest layout message.
+ * Codex derives the height only when a layout arrives, so re-installing after a setting change
+ * replays the latest layout message cached on the window.
  */
 export function installPetsStackHeightHook(
   win: Window,
   getMaxHeight?: () => number,
 ): () => void {
-  const handles = win as unknown as Record<symbol, (() => void) | undefined>;
-  handles[STACK_HOOK_HANDLE_SYMBOL]?.();
-  const readStorage = (): Storage | null => {
-    try {
-      return win.localStorage ?? null;
-    } catch {
-      return null;
-    }
-  };
+  const handles = win as unknown as Record<symbol, unknown>;
+  (handles[STACK_HOOK_HANDLE_SYMBOL] as (() => void) | undefined)?.();
   const state = win as unknown as Record<string, unknown>;
   const hook = (quickChat: unknown) =>
     resolvePetsStackMaxHeight(
-      getMaxHeight ? clampPetsStackMaxHeight(getMaxHeight()) : readPetsStackMaxHeightPreference(readStorage()),
+      getMaxHeight ? clampPetsStackMaxHeight(getMaxHeight()) : DEFAULT_PETS_STACK_MAX_HEIGHT_PX,
       quickChat,
       win.screen?.availHeight ?? 0,
     );
   state[CXP_PETS_STACK_MAX_HEIGHT_HOOK] = hook;
-  let lastLayout: unknown = null;
   const onMessage = (event: MessageEvent): void => {
-    if (isRecord(event.data) && event.data.type === LAYOUT_CHANGED_MESSAGE) lastLayout = event.data;
-  };
-  const onStorage = (event: StorageEvent): void => {
-    if (event.key === PETS_STACK_MAX_HEIGHT_STORAGE_KEY && lastLayout)
-      win.postMessage(lastLayout, "*");
+    if (isRecord(event.data) && event.data.type === LAYOUT_CHANGED_MESSAGE) {
+      handles[LAST_LAYOUT_SYMBOL] = event.data;
+    }
   };
   win.addEventListener("message", onMessage);
-  win.addEventListener("storage", onStorage);
+  if (handles[LAST_LAYOUT_SYMBOL]) {
+    win.postMessage(handles[LAST_LAYOUT_SYMBOL], "*");
+  }
   const dispose = (): void => {
     if (handles[STACK_HOOK_HANDLE_SYMBOL] === dispose)
       handles[STACK_HOOK_HANDLE_SYMBOL] = undefined;
     if (state[CXP_PETS_STACK_MAX_HEIGHT_HOOK] === hook)
       Reflect.deleteProperty(state, CXP_PETS_STACK_MAX_HEIGHT_HOOK);
     win.removeEventListener("message", onMessage);
-    win.removeEventListener("storage", onStorage);
   };
   handles[STACK_HOOK_HANDLE_SYMBOL] = dispose;
   return dispose;
@@ -284,31 +200,6 @@ export function readPetsHarnessCatalog(
     return { enabledAgents, plugins };
   } catch {
     return null;
-  }
-}
-
-export function writePetsHarnessCatalog(
-  catalog: PetsHarnessCatalog,
-  storage?: Pick<Storage, "getItem" | "setItem"> | null,
-): void {
-  try {
-    const enabledAgents = Array.from(
-      new Set<RendererAgent>([
-        "codex",
-        ...catalog.enabledAgents.filter(
-          (a): a is RendererAgent => typeof a === "string" && a.length > 0,
-        ),
-      ]),
-    );
-    const plugins = catalog.plugins
-      .map(sanitizePlugin)
-      .filter((p): p is PetsHarnessCatalogPlugin => Boolean(p));
-    const next = JSON.stringify({ enabledAgents, plugins });
-    // The catalog carries every plugin icon; rewriting it unchanged would wake the Pet for nothing.
-    if (storage?.getItem(PETS_HARNESS_CATALOG_STORAGE_KEY) !== next)
-      storage?.setItem(PETS_HARNESS_CATALOG_STORAGE_KEY, next);
-  } catch {
-    // Ignore storage errors.
   }
 }
 
@@ -473,31 +364,12 @@ export function ensureAvatarOverlayStyles(doc: Document): void {
   style.textContent = buildAvatarOverlayCss();
 }
 
-function serializeSvgFallback(el: Element): string {
-  const tag = (el.localName ?? el.tagName).toLowerCase();
-  const attrs: string[] = [];
-  const rawAttrs = (el as unknown as { attributes?: Map<string, string> | NamedNodeMap }).attributes;
-  if (rawAttrs instanceof Map) {
-    for (const [k, v] of rawAttrs) attrs.push(`${k}=${JSON.stringify(v)}`);
-  } else if (rawAttrs) {
-    for (let i = 0; i < rawAttrs.length; i += 1) {
-      const a = rawAttrs.item(i);
-      if (a) attrs.push(`${a.name}=${JSON.stringify(a.value)}`);
-    }
-  }
-  const children = [...(el.children ?? [])].map(serializeSvgFallback).join("");
-  return `<${tag}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${children}</${tag}>`;
-}
-
 /** CSS background declarations that reproduce a rendered Agent icon on a pseudo-element. */
 function agentIconBackground(icon: Element): string | null {
   const localName = (icon.localName ?? icon.tagName ?? "").toLowerCase();
   if (localName === "svg") {
     icon.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-    const svg =
-      typeof XMLSerializer !== "undefined"
-        ? new XMLSerializer().serializeToString(icon)
-        : serializeSvgFallback(icon);
+    const svg = new XMLSerializer().serializeToString(icon);
     return `background-image: url("data:image/svg+xml,${encodeURIComponent(svg)}");`;
   }
   if (localName !== "img") return null;
@@ -630,7 +502,7 @@ export function installRendererAvatarOverlay(
   let remoteProjects: PetsRemoteProject[] = [];
   const resolveRemoteProjects = (): readonly PetsRemoteProject[] => {
     const live = options.getRemoteProjects?.();
-    if (live && live.length > 0) return live;
+    if (live != null) return live;
     const storage = readStorage();
     const raw = storage?.getItem(PETS_REMOTE_PROJECTS_STORAGE_KEY) ?? null;
     if (raw !== remoteProjectsRaw) {
@@ -711,7 +583,6 @@ export function installRendererAvatarOverlay(
       else if (card.getAttribute(AVATAR_OVERLAY_CARD_AGENT_ATTR) !== agent)
         card.setAttribute(AVATAR_OVERLAY_CARD_AGENT_ATTR, agent);
     }
-    writePetsCardThreads(cardThreads, readStorage());
   };
 
   // Native Quick Chat leaves the composing state once its editor blurs, so the picker must not

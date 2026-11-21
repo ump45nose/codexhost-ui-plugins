@@ -28,6 +28,26 @@ export interface HarnessPluginDescriptor {
   readonly iconStyle?: HarnessPluginIconStyle;
 }
 
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+
+export function parsePluginDescriptors(value: unknown): HarnessPluginDescriptor[] {
+  if (!isRecord(value) || !Array.isArray(value.plugins)) return [];
+  const plugins: HarnessPluginDescriptor[] = [];
+  for (const item of value.plugins) {
+    if (!isRecord(item) || typeof item.id !== "string" || !item.id.trim()) continue;
+    plugins.push({
+      id: item.id,
+      ...(typeof item.name === "string" && item.name ? { name: item.name } : {}),
+      ...(typeof item.icon === "string" && item.icon ? { icon: item.icon } : {}),
+      ...(isRecord(item.iconStyle)
+        ? { iconStyle: item.iconStyle as HarnessPluginDescriptor["iconStyle"] }
+        : {}),
+    });
+  }
+  return plugins;
+}
+
 export function rendererAgentLabel(agent: string, plugin?: HarnessPluginDescriptor): string {
   return agent === "codex" ? "Codex" : (plugin?.name ?? agent);
 }

@@ -28,7 +28,7 @@ const KNOWN_HOST_CASING: Readonly<Record<string, string>> = {
 };
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
+  typeof value === "object" && value !== null && !Array.isArray(value);
 
 /**
  * Walks up React's fiber chain from a native element and returns the first value `pick` derives

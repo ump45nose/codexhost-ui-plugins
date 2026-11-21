@@ -1,4 +1,5 @@
 import {
+  collectSidebarRemoteProjects,
   createRemoteHostGlobe,
   readRemoteHostGlobeColors,
   resolveShortHostLabel,
@@ -6,7 +7,7 @@ import {
 import {
   createRendererAgentIcon,
   type HarnessPluginDescriptor,
-} from "../vendor/agent-icon.ts";
+} from "../../../shared/agent-icon.ts";
 import {
   SIDEBAR_AGENT_ICON_ATTRIBUTE,
   SIDEBAR_THREAD_ROW_SELECTOR,
@@ -29,7 +30,7 @@ import {
 } from "./stash.ts";
 import { ensureTopTabsStyles, removeTopTabsStyles } from "./style.ts";
 
-export const TOP_TABS_ROOT_ATTRIBUTE = "data-codexhost-top-tabs";
+export const TOP_TABS_ROOT_ATTRIBUTE = "data-cxp-top-tabs";
 export const TOP_TAB_ATTRIBUTE = "data-codexhost-top-tab";
 export const TOP_TABS_MORE_ATTRIBUTE = "data-codexhost-top-tabs-more";
 export const TOP_TABS_MENU_ATTRIBUTE = "data-codexhost-top-tabs-menu";
@@ -313,6 +314,12 @@ export function installRendererTopTabs(
 
     const items: StripItem[] = [];
     const globeColors = readRemoteHostGlobeColors(doc);
+    const hostDisplayNames = new Map<string, string>();
+    for (const project of collectSidebarRemoteProjects(doc)) {
+      if (project.hostDisplayName && !hostDisplayNames.has(project.hostId)) {
+        hostDisplayNames.set(project.hostId, project.hostDisplayName);
+      }
+    }
     for (const [key, group] of groups) {
       if (isHiddenByStash(key, group.root.threadId, group.status)) continue;
       const visible =
@@ -326,7 +333,9 @@ export function installRendererTopTabs(
         active: key === activeKey,
         hostLabel: resolveShortHostLabel(
           group.root.hostId,
-          options.getHostLabel?.(group.root.hostId) ?? null,
+          options.getHostLabel?.(group.root.hostId) ??
+            hostDisplayNames.get(group.root.hostId) ??
+            null,
         ),
         hostColor:
           group.root.hostId === "local" ? undefined : (globeColors.get(group.root.hostId) ?? null),
@@ -511,7 +520,10 @@ export function installRendererTopTabs(
       ],
     });
   }
-  const unsubscribePreference = subscribeTopTabsPreference(win, scheduleRender);
+  const unsubscribePreference =
+    options.enabled !== undefined && options.twoRows !== undefined
+      ? () => {}
+      : subscribeTopTabsPreference(win, scheduleRender);
   const unsubscribeStash = options.stash?.subscribe(scheduleRender);
   const onPointerDown = (event: Event): void => {
     const target = event.target;

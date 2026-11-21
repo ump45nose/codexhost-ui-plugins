@@ -341,8 +341,13 @@ export function installPetsRemoteSessions(win: Window): () => void {
   reconcile();
   return () => {
     win.clearInterval(timer);
-    for (const [signal, entry] of owned)
-      if (signal.get() === entry.wrapped) signal.set(entry.original);
+    for (const [signal, entry] of owned) {
+      try {
+        if (signal.get() === entry.wrapped) signal.set(entry.original);
+      } catch {
+        // Ignore stale or disposed signals during teardown.
+      }
+    }
     owned.clear();
   };
 }

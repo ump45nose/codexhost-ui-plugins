@@ -127,12 +127,15 @@ function createFakeStash() {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 80));
 
 describe("vertical plugin manifest", () => {
-  it("declares main window, settings, and no false-positive forkGuards", () => {
+  it("declares main window, settings, and DOM forkGuards", () => {
     expect(manifest.id).toBe("vertical");
     expect(manifest.name).toBe("竖屏");
     expect(manifest.windows).toEqual(["main"]);
     expect(manifest.page).toBe("./page.ts");
-    expect(manifest.forkGuards).toEqual([]);
+    expect(manifest.forkGuards).toEqual([
+      "dom:[data-codexhost-top-tabs]",
+      "dom:#codexhost-top-tabs-styles",
+    ]);
     expect(manifest.settings?.map((s) => [s.key, s.type, s.default])).toEqual([
       ["sidebarAutoCollapse", "toggle", true],
       ["sidebarOverlayBreakpoint", "number", 1080],

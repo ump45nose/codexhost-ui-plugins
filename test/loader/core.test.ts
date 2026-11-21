@@ -126,6 +126,24 @@ describe("fork guards (C1.5)", () => {
     expect(cleanup).toHaveBeenCalledOnce();
     expect(page.loader().getState().local.stash?.status).toBe("dormant");
   });
+
+  it("supports dom: selector guards", () => {
+    const page = setup();
+    const marker = page.doc.createElement("div");
+    marker.setAttribute("data-codexhost-top-tabs", "true");
+    page.doc.body.append(marker);
+
+    const activate = vi.fn();
+    page.register("vertical", activate, ["dom:[data-codexhost-top-tabs]"]);
+    page.push([{ id: "vertical" }]);
+    expect(page.loader().getState().local.vertical?.status).toBe("dormant");
+    expect(activate).not.toHaveBeenCalled();
+
+    marker.remove();
+    vi.advanceTimersByTime(10_000);
+    expect(page.loader().getState().local.vertical?.status).toBe("active");
+    expect(activate).toHaveBeenCalledOnce();
+  });
 });
 
 describe("enable, settings and daemon failures (C1.5b)", () => {

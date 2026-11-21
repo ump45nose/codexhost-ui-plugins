@@ -167,7 +167,11 @@ export function startLoader(win: LoaderWindow, buildId: string): void {
 
   // ---- lifecycle ----
   function guardPresent(slot: Slot): boolean {
-    return slot.forkGuards.some((name) => win[name] != null);
+    return slot.forkGuards.some((name) =>
+      name.startsWith("dom:")
+        ? Boolean(win.document?.querySelector?.(name.slice(4)))
+        : win[name] != null,
+    );
   }
   function reconcileAll(): void {
     for (const slot of slots.values()) reconcile(slot);

@@ -8,17 +8,12 @@ import {
   AVATAR_OVERLAY_STYLE_ID,
   PETS_HARNESS_CATALOG_STORAGE_KEY,
   PETS_QUICK_CHAT_AGENT_STORAGE_KEY,
-  PETS_STACK_MAX_HEIGHT_STORAGE_KEY,
   PETS_THREAD_AGENTS_STORAGE_KEY,
   installPetsStackHeightHook,
   installRendererAvatarOverlay,
-  isAvatarOverlayLocation,
-  isAvatarOverlayRendererUrl,
   parseNativeActivityId,
   readPetsThreadAgents,
   resolvePetsStackMaxHeight,
-  writePetsHarnessCatalog,
-  writePetsThreadAgents,
   type RendererAvatarOverlayHandle,
 } from "../../../plugins/pet/avatar-overlay/index.ts";
 import { writePetsRemoteProjects } from "../../../plugins/pet/quick-chat-target/index.ts";
@@ -101,13 +96,16 @@ function setup(presentation = "minimized") {
   };
 
   const seedCatalog = () => {
-    writePetsHarnessCatalog(
-      { enabledAgents: ["codex", "claude-code"], plugins: [CLAUDE] },
-      win.localStorage as unknown as Storage,
+    win.localStorage.setItem(
+      PETS_HARNESS_CATALOG_STORAGE_KEY,
+      JSON.stringify({ enabledAgents: ["codex", "claude-code"], plugins: [CLAUDE] }),
     );
-    writePetsThreadAgents(
-      { "local:ext-1": "claude-code", "remote-ssh-discovered:mac-work:r-1": "claude-code" },
-      win.localStorage as unknown as Storage,
+    win.localStorage.setItem(
+      PETS_THREAD_AGENTS_STORAGE_KEY,
+      JSON.stringify({
+        "local:ext-1": "claude-code",
+        "remote-ssh-discovered:mac-work:r-1": "claude-code",
+      }),
     );
   };
 
@@ -117,19 +115,6 @@ function setup(presentation = "minimized") {
 const settle = () => new Promise((resolve) => setTimeout(resolve, 80));
 
 describe("Pet avatar-overlay storage & helpers", () => {
-  it("recognizes the Pet window URL forms", () => {
-    expect(isAvatarOverlayRendererUrl("app://-/index.html?initialRoute=%2Favatar-overlay")).toBe(
-      true,
-    );
-    expect(isAvatarOverlayRendererUrl("app://-/index.html?desktopSurface=avatarOverlay")).toBe(
-      true,
-    );
-    expect(isAvatarOverlayRendererUrl("app://-/index.html?initialRoute=%2F")).toBe(false);
-    expect(
-      isAvatarOverlayLocation({ href: "app://-/index.html", pathname: "/index.html", search: "" }),
-    ).toBe(false);
-  });
-
   it("parses native activity ids for local and remote hosts", () => {
     expect(parseNativeActivityId("local:local:t-1")).toEqual({ hostId: "local", threadId: "t-1" });
     expect(parseNativeActivityId("remote-host:remote-ssh-discovered:nas:t-2")).toEqual({
@@ -139,38 +124,42 @@ describe("Pet avatar-overlay storage & helpers", () => {
     expect(parseNativeActivityId("client-new-thread:abc")).toBeNull();
   });
 
-  it("publishes external thread Agents without rewriting unchanged maps", () => {
+  it("reads external thread Agents from storage while omitting codex", () => {
     const { win } = setup();
-    const storage = win.localStorage as unknown as Storage;
-    writePetsThreadAgents({ "local:a": "claude-code", "local:b": "codex" }, storage);
-    expect([...readPetsThreadAgents(storage)]).toEqual([["local:a", "claude-code"]]);
-    const setItem = vi.spyOn(win.localStorage, "setItem");
-    writePetsThreadAgents({ "local:a": "claude-code", "local:b": "codex" }, storage);
-    expect(setItem).not.toHaveBeenCalledWith(PETS_THREAD_AGENTS_STORAGE_KEY, expect.anything());
-    const catalog = { enabledAgents: ["codex", "claude-code"], plugins: [CLAUDE] };
-    writePetsHarnessCatalog(catalog, storage);
-    setItem.mockClear();
-    writePetsHarnessCatalog(catalog, storage);
-    expect(setItem).not.toHaveBeenCalledWith(PETS_HARNESS_CATALOG_STORAGE_KEY, expect.anything());
+    win.localStorage.setItem(
+      PETS_THREAD_AGENTS_STORAGE_KEY,
+      JSON.stringify({ "local:a": "claude-code", "local:b": "codex" }),
+    );
+    expect([...readPetsThreadAgents(win.localStorage as unknown as Storage)]).toEqual([
+      ["local:a", "claude-code"],
+    ]);
   });
 
-  it("installs __cxpPetsStackMaxHeight and replays layout on storage change", () => {
+  it("installs __cxpPetsStackMaxHeight and replays cached layout on reinstall", () => {
     const { win } = setup();
-    const dispose = installPetsStackHeightHook(win as unknown as Window, () => 700);
-    disposers.push(dispose);
-    const hook = win[CXP_PETS_STACK_MAX_HEIGHT_HOOK] as ((qc: unknown) => number) | undefined;
-    expect(typeof hook).toBe("function");
-    expect(hook?.({ workArea: { height: 900 } })).toBe(resolvePetsStackMaxHeight(700, { workArea: { height: 900 } }, 1000));
-    expect(hook?.({ workArea: { height: 900 } })).toBe(660);
-    expect(hook?.(null)).toBe(700);
+    const dispose1 = installPetsStackHeightHook(win as unknown as Window, () => 700);
+    disposers.push(dispose1);
+    const hook1 = win[CXP_PETS_STACK_MAX_HEIGHT_HOOK] as ((qc: unknown) => number) | undefined;
+    expect(typeof hook1).toBe("function");
+    expect(hook1?.({ workArea: { height: 900 } })).toBe(
+      resolvePetsStackMaxHeight(700, { workArea: { height: 900 } }, 1000),
+    );
+    expect(hook1?.({ workArea: { height: 900 } })).toBe(660);
+    expect(hook1?.(null)).toBe(700);
 
-    win.dispatchEvent(new MessageEvent("message", { data: { type: "avatar-overlay-layout-changed", x: 1 } }));
-    const storageEvent = new Event("storage") as Event & { key: string };
-    storageEvent.key = PETS_STACK_MAX_HEIGHT_STORAGE_KEY;
-    win.dispatchEvent(storageEvent);
+    win.dispatchEvent(
+      new MessageEvent("message", { data: { type: "avatar-overlay-layout-changed", x: 1 } }),
+    );
+    dispose1();
+    expect(win[CXP_PETS_STACK_MAX_HEIGHT_HOOK]).toBeUndefined();
+
+    const dispose2 = installPetsStackHeightHook(win as unknown as Window, () => 740);
+    disposers.push(dispose2);
     expect(win.postedMessages).toEqual([{ type: "avatar-overlay-layout-changed", x: 1 }]);
+    const hook2 = win[CXP_PETS_STACK_MAX_HEIGHT_HOOK] as ((qc: unknown) => number) | undefined;
+    expect(hook2?.(null)).toBe(740);
 
-    dispose();
+    dispose2();
     expect(win[CXP_PETS_STACK_MAX_HEIGHT_HOOK]).toBeUndefined();
   });
 });

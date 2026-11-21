@@ -2,13 +2,16 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 // Ported from codex-host packages/renderer-extension/src/renderer-pets-quick-chat-target.ts.
 
+import {
+  parsePluginDescriptors,
+  type HarnessPluginDescriptor,
+} from "../../../shared/agent-icon.ts";
 import { hostRequest, hostRouting } from "../../../shared/host.ts";
 import {
   resolveShortHostLabel,
   type SidebarRemoteProject,
 } from "../../../shared/remote-projects.ts";
 import { CXP_QUICK_CHAT_TARGET_HOOK } from "../rewrites.ts";
-import type { HarnessPluginDescriptor } from "../vendor/agent-icon.ts";
 
 /** Remote projects Pet Quick Chat can start a thread in. */
 export const PETS_REMOTE_PROJECTS_STORAGE_KEY = "codexhost.pets-remote-projects.v1";
@@ -147,23 +150,6 @@ export function installPetsQuickChatTargetHook(
   };
 }
 
-export function parseHostPluginDescriptors(value: unknown): HarnessPluginDescriptor[] {
-  if (!isRecord(value) || !Array.isArray(value.plugins)) return [];
-  const plugins: HarnessPluginDescriptor[] = [];
-  for (const item of value.plugins) {
-    if (!isRecord(item) || typeof item.id !== "string" || !item.id.trim()) continue;
-    plugins.push({
-      id: item.id,
-      ...(typeof item.name === "string" && item.name ? { name: item.name } : {}),
-      ...(typeof item.icon === "string" && item.icon ? { icon: item.icon } : {}),
-      ...(isRecord(item.iconStyle)
-        ? { iconStyle: item.iconStyle as HarnessPluginDescriptor["iconStyle"] }
-        : {}),
-    });
-  }
-  return plugins;
-}
-
 export interface FetchRemoteProjectsResult {
   readonly projects: readonly PetsRemoteProject[];
   readonly hostPlugins: ReadonlyMap<string, readonly HarnessPluginDescriptor[]>;
@@ -250,7 +236,7 @@ export async function fetchPetsRemoteProjectsFromHost(options: {
       pluginHosts.map(async (hostId) => {
         try {
           const result = await requestHost(hostId, HARNESS_PLUGIN_LIST_METHOD, {});
-          hostPlugins.set(hostId, parseHostPluginDescriptors(result));
+          hostPlugins.set(hostId, parsePluginDescriptors(result));
         } catch {
           // Ignore disconnected or older hosts.
         }
@@ -289,9 +275,12 @@ export async function fetchPetsRemoteProjectsFromHost(options: {
   }
 
   const merged = new Map<string, PetsRemoteProject>();
+  const seenPaths = new Set<string>();
   const addEntry = (entry: DesktopRemoteProjectEntry) => {
     const key = `${entry.hostId}\n${entry.id}`;
-    if (merged.has(key)) return;
+    const pathKey = `${entry.hostId}\n${entry.path}`;
+    if (merged.has(key) || seenPaths.has(pathKey)) return;
+    seenPaths.add(pathKey);
     const stored = storedByKey.get(key);
     const plugins = hostPlugins.get(entry.hostId);
     const agents = plugins

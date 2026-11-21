@@ -5,7 +5,6 @@ import {
   SIDEBAR_AUTO_COLLAPSE_STORAGE_KEY,
   SIDEBAR_OVERLAY_MODE_STORAGE_KEY,
   SIDEBAR_PIN_BUTTON_ATTRIBUTE,
-  buildSidebarOverlayCss,
   installRendererSidebarOverlay,
   readSidebarAutoCollapsePreference,
   setSidebarAutoCollapsePreference,
@@ -156,9 +155,7 @@ describe("installRendererSidebarOverlay", () => {
     handle.dispose();
   });
 
-  it("removes custom overlay CSS, never hides app-shell-floating-left-panel, and injects no pin button", () => {
-    expect(buildSidebarOverlayCss()).toBe("");
-
+  it("never hides app-shell-floating-left-panel and injects no pin button", () => {
     const env = createTestEnvironment(954);
     const handle = installRendererSidebarOverlay({
       document: env.doc,

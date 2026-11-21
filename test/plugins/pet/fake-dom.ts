@@ -366,8 +366,22 @@ export class FakeWindow extends EventTarget {
   }
 }
 
+function serializeFakeElement(el: FakeElement): string {
+  const attrs: string[] = [];
+  for (const [k, v] of el.attributes) attrs.push(`${k}=${JSON.stringify(v)}`);
+  const children = el.children.map(serializeFakeElement).join("");
+  return `<${el.localName}${attrs.length ? ` ${attrs.join(" ")}` : ""}>${children}</${el.localName}>`;
+}
+
+export class FakeXMLSerializer {
+  serializeToString(node: unknown): string {
+    return serializeFakeElement(node as FakeElement);
+  }
+}
+
 export function installFakeMutationObserver(): () => void {
   const Original = globalThis.MutationObserver;
+  const OriginalSerializer = globalThis.XMLSerializer;
   class FakeMutationObserver {
     private readonly callback: MutationCallback;
     private entry: ObserverEntry | null = null;
@@ -399,7 +413,9 @@ export function installFakeMutationObserver(): () => void {
     }
   }
   globalThis.MutationObserver = FakeMutationObserver as unknown as typeof MutationObserver;
+  globalThis.XMLSerializer = FakeXMLSerializer as unknown as typeof XMLSerializer;
   return () => {
     globalThis.MutationObserver = Original;
+    globalThis.XMLSerializer = OriginalSerializer;
   };
 }

@@ -1,7 +1,7 @@
 import type { TopTabStatus } from "./index.ts";
 
 export const TOP_TAB_STASH_ATTRIBUTE = "data-codexhost-top-tab-stash";
-export const TOP_TAB_CONTEXT_MENU_ATTRIBUTE = "data-codexhost-top-tab-context-menu";
+export const TOP_TAB_CONTEXT_MENU_ATTRIBUTE = "data-cxp-top-tab-context-menu";
 export const CXP_STASH_GLOBAL_KEY = "__cxpStashV1";
 
 export interface TopTabsStashTarget {
@@ -204,17 +204,19 @@ export function openTabContextMenu(input: {
   };
   doc.addEventListener("pointerdown", onPointerDown, true);
   doc.addEventListener("keydown", onKeyDown, true);
-  menuCleanups.set(menu, () => {
+  activeMenuCleanups.set(doc, () => {
     doc.removeEventListener("pointerdown", onPointerDown, true);
     doc.removeEventListener("keydown", onKeyDown, true);
+    menu.remove();
   });
 }
 
-const menuCleanups = new WeakMap<Element, () => void>();
+const activeMenuCleanups = new WeakMap<Document, () => void>();
 
 export function closeTabContextMenu(doc: Document): void {
+  activeMenuCleanups.get(doc)?.();
+  activeMenuCleanups.delete(doc);
   for (const menu of doc.querySelectorAll(`[${TOP_TAB_CONTEXT_MENU_ATTRIBUTE}]`)) {
-    menuCleanups.get(menu)?.();
     menu.remove();
   }
 }

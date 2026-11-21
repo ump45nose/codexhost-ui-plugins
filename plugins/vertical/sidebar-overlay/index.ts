@@ -6,7 +6,6 @@ import {
   subscribeSidebarAutoCollapsePreference,
   writeSidebarAutoCollapsePreference,
 } from "./preference.ts";
-import { ensureSidebarOverlayStyles } from "./style.ts";
 
 export const SIDEBAR_OVERLAY_HTML_ATTRIBUTE = "data-codexhost-sidebar-overlay";
 export const SIDEBAR_OVERLAY_OPEN_HTML_ATTRIBUTE = "data-codexhost-sidebar-overlay-open";
@@ -36,7 +35,6 @@ export function installRendererSidebarOverlay(
   const doc = options.document ?? document;
   const win = options.window ?? doc.defaultView ?? window;
 
-  ensureSidebarOverlayStyles(doc);
   doc.documentElement?.removeAttribute(SIDEBAR_OVERLAY_HTML_ATTRIBUTE);
   doc.documentElement?.removeAttribute(SIDEBAR_OVERLAY_OPEN_HTML_ATTRIBUTE);
   for (const btn of doc.querySelectorAll(`[${SIDEBAR_PIN_BUTTON_ATTRIBUTE}]`)) {
@@ -108,10 +106,10 @@ export function installRendererSidebarOverlay(
     }
   };
 
-  const unsubscribePreference = subscribeSidebarAutoCollapsePreference(
-    win,
-    evaluateModeAndViewport,
-  );
+  const unsubscribePreference =
+    options.autoCollapse !== undefined && options.breakpoint !== undefined
+      ? () => {}
+      : subscribeSidebarAutoCollapsePreference(win, evaluateModeAndViewport);
   win.addEventListener("resize", evaluateModeAndViewport);
 
   const mutationObserver =
@@ -155,4 +153,3 @@ export function installRendererSidebarOverlay(
 }
 
 export * from "./preference.ts";
-export * from "./style.ts";

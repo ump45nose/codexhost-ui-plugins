@@ -6,16 +6,16 @@ import { afterEach, describe, expect, it } from "vitest";
 const roots: string[] = [];
 afterEach(() => { for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true }); });
 
-function fixture(config?: string) {
-  const root = mkdtempSync(resolve(".spec/.w40b-install-"));
+function fixture(config?: string, cellar = false) {
+  const root = mkdtempSync(resolve(".w40b-install-"));
   roots.push(root);
-  const bin = join(root, "bin");
+  const bin = cellar ? join(root, "Cellar/node/26.0/bin") : join(root, "bin");
   const configDir = join(root, ".config/codexhost-ui-plugins");
   const configPath = join(configDir, "config.json");
   const launchLog = join(root, "launchctl.log");
   const serviceState = join(root, "launchagent-running");
   writeFileSync(serviceState, "running");
-  mkdirSync(bin);
+  mkdirSync(bin, { recursive: true });
   const executable = (name: string, source: string) => {
     const path = join(bin, name);
     writeFileSync(path, source);
@@ -45,8 +45,30 @@ esac
     stdio: "pipe",
   });
   const launchCalls = () => existsSync(launchLog) ? readFileSync(launchLog, "utf8").trim().split("\n") : [];
-  return { root, configDir, configPath, install, launchCalls, serviceRunning: () => existsSync(serviceState) };
+  return { root, bin, configDir, configPath, install, launchCalls, serviceRunning: () => existsSync(serviceState) };
 }
+
+describe("Homebrew node path", () => {
+  it("uses the stable prefix link for a Cellar node", () => {
+    const f = fixture(undefined, true);
+    const stable = join(f.root, "bin/node");
+    mkdirSync(join(f.root, "bin"));
+    writeFileSync(stable, readFileSync(join(f.bin, "node")), { mode: 0o755 });
+    f.install();
+    expect(readFileSync(join(f.root, "Library/LaunchAgents/io.github.ump45nose.codexhost-ui-plugins.plist"), "utf8")).toContain(`<string>${stable}</string>`);
+  });
+
+  it.each(["missing", "old"])("leaves the service running when the stable node is %s", (kind) => {
+    const f = fixture(undefined, true);
+    if (kind === "old") {
+      mkdirSync(join(f.root, "bin"));
+      writeFileSync(join(f.root, "bin/node"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+    }
+    expect(() => f.install()).toThrow();
+    expect(f.launchCalls()).toEqual([]);
+    expect(f.serviceRunning()).toBe(true);
+  });
+});
 
 describe("installation preserves configuration", () => {
   it("fills a missing picker directory in place and retains unrelated and unknown settings", () => {

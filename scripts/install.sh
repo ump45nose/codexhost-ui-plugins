@@ -32,6 +32,12 @@ while [ $# -gt 0 ]; do
 done
 
 node=$(command -v node) || die "Node.js >= 22.18 is required, but node is not on PATH"
+case "$node" in
+  */Cellar/*/bin/node)
+    node="${node%%/Cellar/*}/bin/node"
+    [ -x "$node" ] || die "Homebrew stable node link is missing or not executable: $node"
+    ;;
+esac
 "$node" -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 18) ? 0 : 1)' ||
   die "Node.js >= 22.18 is required, found $("$node" -v) at $node"
 command -v npm >/dev/null || die "npm is not on PATH"

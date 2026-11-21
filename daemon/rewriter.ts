@@ -3,12 +3,14 @@
 import type { Cdp, CdpResult } from "./cdp.ts";
 import { type Channel, errorText, type Log } from "./channel.ts";
 import type { Registry } from "./registry.ts";
+import { PET_FORK_REWRITE_MARKERS } from "../plugins/pet/rewrites.ts";
 
 const IDENTIFY_TIMEOUT_MS = 10_000;
 
 interface PetLoad {
-  identified: Set<string>; // plugins whose rules recognised a chunk in this document
+  identified: Map<string, Set<number>>; // recognised rule indices by plugin in this document
   failed: Set<string>; // plugins that failed in this document (their rules are skipped)
+  dormant: Set<string>; // plugins superseded by fork rewrites in this document
   timer?: ReturnType<typeof setTimeout>;
 }
 
@@ -44,7 +46,7 @@ export class Rewriter {
       { patterns: [{ urlPattern: "*", resourceType: "Script", requestStage: "Response" }] },
       sessionId,
     );
-    this.#loads.set(sessionId, { identified: new Set(), failed: new Set() });
+    this.#loads.set(sessionId, { identified: new Map(), failed: new Set(), dormant: new Set() });
   }
 
   async disable(sessionId: string): Promise<void> {
@@ -61,21 +63,22 @@ export class Rewriter {
     const load = this.#loads.get(sessionId);
     if (!load) return;
     clearTimeout(load.timer);
-    this.#loads.set(sessionId, { identified: new Set(), failed: new Set() });
+    this.#loads.set(sessionId, { identified: new Map(), failed: new Set(), dormant: new Set() });
     for (const p of this.#registry.plugins) {
       if (this.#channel.statusOf(p.id, "rewriter")) this.#channel.setStatus(p.id, "rewriter", null);
     }
   }
 
-  /** Pet `Page.loadEventFired`: plugins whose rules recognised nothing within the timeout fail. */
+  /** Pet `Page.loadEventFired`: each rewrite rule must recognise a chunk within the timeout. */
   petLoaded(sessionId: string): void {
     const load = this.#loads.get(sessionId);
     if (!load) return;
     clearTimeout(load.timer);
     load.timer = setTimeout(() => {
       for (const p of this.#registry.plugins) {
-        if (!p.enabled || !p.rewrites.length || load.identified.has(p.id) || load.failed.has(p.id)) continue;
-        const names = p.rewrites.map((r) => r.name).join(", ");
+        if (!p.enabled || !p.rewrites.length || load.failed.has(p.id) || load.dormant.has(p.id)) continue;
+        const names = p.rewrites.filter((_, index) => !load.identified.get(p.id)?.has(index)).map((r) => r.name).join(", ");
+        if (!names) continue;
         this.#fail(load, p.id, `no Pet chunk matched rewrite rule(s) ${names} within ${IDENTIFY_TIMEOUT_MS / 1000} s of load`);
       }
     }, IDENTIFY_TIMEOUT_MS);
@@ -118,13 +121,22 @@ export class Rewriter {
   #rewrite(load: PetLoad, source: string): string {
     let current = source;
     for (const p of this.#registry.plugins) {
-      if (!p.enabled || !p.rewrites.length || load.failed.has(p.id)) continue;
+      if (!p.enabled || !p.rewrites.length) continue;
+      if (p.id === "pet" && PET_FORK_REWRITE_MARKERS.some((marker) => source.includes(marker))) {
+        load.dormant.add(p.id);
+        load.failed.delete(p.id);
+        this.#channel.setStatus(p.id, "rewriter", null);
+        // The page loader watches this separate marker; do not change the fork's own globals.
+        current = `${current}\n;globalThis.__cxpPetForkRewriteDetected=true;`;
+      }
+      if (load.failed.has(p.id) || load.dormant.has(p.id)) continue;
       let next = current;
       let failure: string | null = null;
-      for (const rule of p.rewrites) {
+      for (const [index, rule] of p.rewrites.entries()) {
         try {
           if (!rule.identify(next)) continue;
-          load.identified.add(p.id);
+          if (!load.identified.has(p.id)) load.identified.set(p.id, new Set());
+          load.identified.get(p.id)!.add(index);
           const applied = rule.apply(next);
           if (applied === null) {
             failure = `rewrite rule ${rule.name} recognised a Pet chunk but could not apply`;

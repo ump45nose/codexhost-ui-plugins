@@ -176,11 +176,11 @@ describe("rewriter", () => {
     expect(t.cdp.calls.at(-1)).toMatchObject({ method: "Fetch.continueRequest", params: { requestId: "gone" } });
   });
 
-  it("fails a plugin whose rules recognised nothing within 10 s of Pet load; a new load clears it", async () => {
+  it("fails a plugin if any rule is not identified within 10 s of Pet load; a new load clears it", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const t = await petWith([
       plugin("found", { windows: ["pet"], rewrites: [rule("f", (s) => s.includes("PET"), (s) => s)] }),
-      plugin("lost", { windows: ["pet"], rewrites: [rule("l1", () => false, () => null), rule("l2", () => false, () => null)] }),
+      plugin("lost", { windows: ["pet"], rewrites: [rule("l1", (s) => s.includes("PET"), (s) => s), rule("l2", () => false, () => null)] }),
       plugin("off", { windows: ["pet"], enabled: false, rewrites: [rule("o", () => false, () => null)] }),
     ]);
     await pause(t, "p", "PET");
@@ -188,12 +188,26 @@ describe("rewriter", () => {
     vi.advanceTimersByTime(9_999);
     expect(t.channel.aggregate("lost").status).toBe("active");
     vi.advanceTimersByTime(1);
-    expect(t.channel.aggregate("lost")).toEqual({ status: "failed", source: "rewriter", reason: "no Pet chunk matched rewrite rule(s) l1, l2 within 10 s of load" });
+    expect(t.channel.aggregate("lost")).toEqual({ status: "failed", source: "rewriter", reason: "no Pet chunk matched rewrite rule(s) l2 within 10 s of load" });
     expect(t.channel.aggregate("found").status).toBe("active");
     expect(t.channel.aggregate("off").status).toBe("off");
     t.cdp.emit("Page.frameNavigated", { frame: { id: "f", url: PET } }, "p");
     await flush();
     expect(t.channel.aggregate("lost").status).toBe("active");
+  });
+
+  it("suspends Pet rewriting when a fork marker is present and signals the page loader", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const t = await petWith([
+      plugin("pet", { windows: ["pet"], rewrites: [rule("r", (s) => s.includes("PET"), () => null)] }),
+    ]);
+    const done = await pause(t, "p", 'globalThis.__codexhostPetsStackPatched=true; "PET"');
+    expect(done.method).toBe("Fetch.fulfillRequest");
+    expect(decoded(done as never)).toBe('globalThis.__codexhostPetsStackPatched=true; "PET"\n;globalThis.__cxpPetForkRewriteDetected=true;');
+    expect((await pause(t, "p", '"PET"')).method).toBe("Fetch.continueRequest");
+    t.cdp.emit("Page.loadEventFired", {}, "p");
+    vi.advanceTimersByTime(10_000);
+    expect(t.channel.aggregate("pet").status).not.toBe("failed");
   });
 
   it("reloads Pet when a plugin with rewrites is switched, or retried after a rewriter failure", async () => {

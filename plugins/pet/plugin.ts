@@ -4,7 +4,7 @@ import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { PluginManifest, TaskContext } from "../types.ts";
-import { petRewrites } from "./rewrites.ts";
+import { PET_FORK_REWRITE_MARKERS, petRewrites } from "./rewrites.ts";
 
 interface DesktopRemoteProjectRecord {
   readonly id: string;
@@ -94,10 +94,8 @@ const manifest: PluginManifest = {
   page: "./page.ts",
   rewrites: petRewrites,
   forkGuards: [
-    "__codexhostAvatarOverlayV1",
-    "__codexhostPetsStackMaxHeight",
-    "__codexhostQuickChatTarget",
-    "__codexhostPetsStackPatched",
+    "__cxpPetForkRewriteDetected",
+    ...PET_FORK_REWRITE_MARKERS,
   ],
   task: petTask,
   settings: [

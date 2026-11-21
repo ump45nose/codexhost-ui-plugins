@@ -50,6 +50,7 @@ describe("pet plugin manifest & daemon task", () => {
       "pet-client-thread-link",
     ]);
     expect(manifest.forkGuards).toEqual([
+      "__cxpPetForkRewriteDetected",
       "__codexhostAvatarOverlayV1",
       "__codexhostPetsStackMaxHeight",
       "__codexhostQuickChatTarget",

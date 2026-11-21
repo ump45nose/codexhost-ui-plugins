@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startLoader } from "../../loader/core.ts";
+import petManifest from "../../plugins/pet/plugin.ts";
 import { fakeWindow } from "./fake-window.ts";
 
 beforeEach(() => vi.useFakeTimers());
@@ -85,6 +86,19 @@ describe("loader isolation (C1.4)", () => {
 });
 
 describe("fork guards (C1.5)", () => {
+  it("suspends the Pet page after the rewriter detects fork code", () => {
+    const page = setup("pet");
+    const cleanup = vi.fn();
+    page.register("pet", () => cleanup, petManifest.forkGuards);
+    page.push([{ id: "pet" }]);
+    expect(page.loader().getState().local.pet?.status).toBe("active");
+    page.win.__cxpPetForkRewriteDetected = true;
+    vi.advanceTimersByTime(1_000);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(page.loader().getState().local.pet?.status).toBe("dormant");
+    expect(page.statuses("pet")).toEqual(["active", "dormant"]);
+  });
+
   it("is dormant while a guard is present and activates within 10 s after it goes", () => {
     const page = setup();
     page.win.__forkStash = {};

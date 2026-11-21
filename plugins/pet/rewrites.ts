@@ -8,6 +8,12 @@ import type { ChunkRewrite } from "../types.ts";
 export const CXP_PETS_STACK_PATCHED_MARKER = "__cxpPetsStackPatched";
 export const CXP_PETS_STACK_MAX_HEIGHT_HOOK = "__cxpPetsStackMaxHeight";
 export const CXP_QUICK_CHAT_TARGET_HOOK = "__cxpQuickChatTarget";
+export const PET_FORK_REWRITE_MARKERS = [
+  "__codexhostAvatarOverlayV1",
+  "__codexhostPetsStackMaxHeight",
+  "__codexhostQuickChatTarget",
+  "__codexhostPetsStackPatched",
+];
 
 const STACK_HEIGHT_MARKER = "activityStackMaxViewportHeight$:";
 const STACK_HEIGHT_EXPRESSION =

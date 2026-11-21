@@ -64,6 +64,7 @@ describe("injector", () => {
       "Runtime.enable",
       "Runtime.addBinding",
       "Page.enable",
+      "Network.enable",
       "Network.setCacheDisabled",
       "Fetch.enable",
       "Page.addScriptToEvaluateOnNewDocument",
@@ -92,7 +93,7 @@ describe("injector", () => {
   });
 
   const preparationCommands = [
-    "Runtime.enable", "Runtime.addBinding", "Page.enable", "Network.setCacheDisabled",
+    "Runtime.enable", "Runtime.addBinding", "Page.enable", "Network.enable", "Network.setCacheDisabled",
     "Fetch.enable", "Page.addScriptToEvaluateOnNewDocument", "Runtime.evaluate",
   ];
 

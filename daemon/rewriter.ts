@@ -40,7 +40,9 @@ export class Rewriter {
 
   /** Must run before the page loads its scripts. Cached scripts would bypass interception. */
   async enable(sessionId: string): Promise<void> {
-    await this.#send("Network.setCacheDisabled", { cacheDisabled: true }, sessionId).catch(() => undefined);
+    // The cache switch only takes effect while the Network domain is enabled in this session.
+    await this.#send("Network.enable", {}, sessionId);
+    await this.#send("Network.setCacheDisabled", { cacheDisabled: true }, sessionId);
     await this.#send(
       "Fetch.enable",
       { patterns: [{ urlPattern: "*", resourceType: "Script", requestStage: "Response" }] },
@@ -52,6 +54,7 @@ export class Rewriter {
   async disable(sessionId: string): Promise<void> {
     this.pageClosed(sessionId);
     await this.#send("Fetch.disable", {}, sessionId).catch(() => undefined);
+    await this.#send("Network.disable", {}, sessionId).catch(() => undefined);
   }
 
   isEnabled(sessionId: string): boolean {
